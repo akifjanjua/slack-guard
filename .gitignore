@@ -1,0 +1,9 @@
+dist/
+reference/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+credentials.local.json
+keys.local.json
+slack-guard-smoke-report.json

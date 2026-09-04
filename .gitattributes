@@ -1,0 +1,14 @@
+*.py text eol=lf
+*.json text eol=lf
+*.sig text eol=lf
+*.md text eol=lf
+.gitignore text eol=lf
+.moduleignore text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+.gitattributes -text
+.moduleignore -text
+module.json -text -eol
+module.sig -text
+handlers/handler.py -text -eol

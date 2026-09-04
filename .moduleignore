@@ -1,0 +1,5 @@
+dist/
+reference/
+__pycache__/
+.pytest_cache/
+*.pyc
