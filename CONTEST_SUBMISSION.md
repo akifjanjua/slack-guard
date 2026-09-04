@@ -20,9 +20,10 @@ This entry is being filed while the module is still in active build-out — see 
 
 ## Verification evidence
 
-- **Signature**: to be signed with the real registered publisher key (fingerprint `e469d55383447fc6b95cbffb786fee7c…`, the same identity used for Linear Guard and Notion Guard) via `tools/sign_module_tree.py`, independently verified by this repo's own `tools/verify_module_tree.py` and by RailCall's own CLI (`railcall market module verify`). **[Pending — not yet run as of this commit.]**
-- **Real end-to-end read**: **[Pending — requires a Slack bot token, which only the module operator can create and configure in RailCall Studio → Integrations; see README → Configure credentials.]**
-- **Sandbox enforcement**: **[Pending — to be captured from Station's boot log once the module is installed and loaded.]**
+- **Signature**: signed with the real registered publisher key (fingerprint `e469d55383447fc6b95cbffb786fee7c…`, the same identity used for Linear Guard and Notion Guard) via `tools/sign_module_tree.py`. Independently verified both by this repo's own `tools/verify_module_tree.py` (`PASS: RailCall v2 module tree signature is valid`, 23 signed tree files) and by RailCall's own CLI (`railcall market module verify .`): `✓ signature valid`, `ownership: ✓ signed by your local key`.
+- **Module loaded in a real Station**: boot log confirms `muhammad-akif-janjua/slack-guard v0.1.0 · slack.get_team_info` loaded clean (`loaded=3 rejected=4`, this module among the 3 loaded).
+- **Sandbox enforcement, not just declaration**: Station's own boot log shows the gate actually installed for this module: `network gate armed — allow: ['slack.com']`, `subprocess gate CLOSED`, `filesystem-write gate active — allow: (none)`.
+- **Real end-to-end read with a signed receipt**: **[Pending — requires a Slack bot token, which only the module operator can create and configure in RailCall Studio → Integrations; see README → Configure credentials. Station is running locally and the module is installed and loaded, ready for this step.]**
 
 ## Trust declaration
 
