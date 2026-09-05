@@ -353,6 +353,180 @@ def test_bounded_limit(h) -> None:
     print("PASS: _bounded_limit (default, cap, positive-integer validation)")
 
 
+def test_post_message(h) -> None:
+    def fake_request(method, path, api_key, body=None, query=None, is_write=False):
+        assert method == "POST" and path == "/chat.postMessage" and is_write is True
+        assert body == {"channel": "C1", "text": "hi", "thread_ts": "1.1"}
+        return 200, {"ok": True, "channel": "C1", "ts": "2.2"}
+
+    h._request = fake_request
+    out, _ = h.slack_post_message({"channel_id": "C1", "text": "hi", "thread_ts": "1.1"}, None)
+    assert out["channel_id"] == "C1" and out["message_ts"] == "2.2"
+
+    try:
+        h.slack_post_message({"channel_id": "C1"}, None)
+        raise AssertionError("expected missing text rejection")
+    except RuntimeError as exc:
+        assert "text" in str(exc)
+    print("PASS: slack_post_message (thread_ts passthrough, required text)")
+
+
+def test_post_ephemeral(h) -> None:
+    def fake_request(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/chat.postEphemeral" and is_write is True
+        assert body == {"channel": "C1", "user": "U1", "text": "hi"}
+        return 200, {"ok": True, "message_ts": "3.3"}
+
+    h._request = fake_request
+    out, _ = h.slack_post_ephemeral({"channel_id": "C1", "user_id": "U1", "text": "hi"}, None)
+    assert out["message_ts"] == "3.3"
+    print("PASS: slack_post_ephemeral")
+
+
+def test_reactions(h) -> None:
+    def fake_request(method, path, api_key, body=None, query=None, is_write=False):
+        assert is_write is True
+        assert body == {"channel": "C1", "timestamp": "1.1", "name": "thumbsup"}
+        return 200, {"ok": True}
+
+    h._request = fake_request
+    out, _ = h.slack_add_reaction({"channel_id": "C1", "timestamp": "1.1", "name": "thumbsup"}, None)
+    assert out["name"] == "thumbsup"
+    out, _ = h.slack_remove_reaction({"channel_id": "C1", "timestamp": "1.1", "name": "thumbsup"}, None)
+    assert out["name"] == "thumbsup"
+    print("PASS: slack_add_reaction / slack_remove_reaction")
+
+
+def test_pins(h) -> None:
+    def fake_request(method, path, api_key, body=None, query=None, is_write=False):
+        assert is_write is True
+        assert body == {"channel": "C1", "timestamp": "1.1"}
+        return 200, {"ok": True}
+
+    h._request = fake_request
+    out, _ = h.slack_add_pin({"channel_id": "C1", "timestamp": "1.1"}, None)
+    assert out["timestamp"] == "1.1"
+    out, _ = h.slack_remove_pin({"channel_id": "C1", "timestamp": "1.1"}, None)
+    assert out["timestamp"] == "1.1"
+    print("PASS: slack_add_pin / slack_remove_pin")
+
+
+def test_bookmarks(h) -> None:
+    def fake_add(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/bookmarks.add" and is_write is True
+        assert body == {"channel_id": "C1", "title": "Runbook", "link": "https://x/y", "type": "link"}
+        return 200, {"ok": True, "bookmark": {"id": "Bk1", "title": "Runbook", "link": "https://x/y"}}
+
+    h._request = fake_add
+    out, _ = h.slack_add_bookmark({"channel_id": "C1", "title": "Runbook", "link": "https://x/y"}, None)
+    assert out["bookmark_id"] == "Bk1"
+
+    def fake_edit(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/bookmarks.edit" and body["bookmark_id"] == "Bk1" and body["title"] == "New title"
+        return 200, {"ok": True, "bookmark": {"id": "Bk1", "title": "New title", "link": "https://x/y"}}
+
+    h._request = fake_edit
+    out, _ = h.slack_edit_bookmark({"channel_id": "C1", "bookmark_id": "Bk1", "title": "New title"}, None)
+    assert out["title"] == "New title"
+
+    try:
+        h.slack_edit_bookmark({"channel_id": "C1", "bookmark_id": "Bk1"}, None)
+        raise AssertionError("expected at-least-one-field rejection")
+    except RuntimeError as exc:
+        assert "at least one" in str(exc)
+
+    def fake_remove(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/bookmarks.remove" and body == {"channel_id": "C1", "bookmark_id": "Bk1"}
+        return 200, {"ok": True}
+
+    h._request = fake_remove
+    out, _ = h.slack_remove_bookmark({"channel_id": "C1", "bookmark_id": "Bk1"}, None)
+    assert out["bookmark_id"] == "Bk1"
+    print("PASS: slack_add_bookmark / slack_edit_bookmark (at-least-one-field validation) / slack_remove_bookmark")
+
+
+def test_reminders(h) -> None:
+    def fake_add(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/reminders.add" and body == {"text": "Standup", "time": "in 5 minutes", "user": "U1"}
+        return 200, {"ok": True, "reminder": {"id": "Rm1", "text": "Standup", "time": 1234}}
+
+    h._request = fake_add
+    out, _ = h.slack_add_reminder({"text": "Standup", "time": "in 5 minutes", "user_id": "U1"}, None)
+    assert out["reminder_id"] == "Rm1"
+
+    def fake_complete(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/reminders.complete" and body == {"reminder": "Rm1"}
+        return 200, {"ok": True}
+
+    h._request = fake_complete
+    out, _ = h.slack_complete_reminder({"reminder_id": "Rm1"}, None)
+    assert out["reminder_id"] == "Rm1"
+    print("PASS: slack_add_reminder (optional user) / slack_complete_reminder")
+
+
+def test_channel_topic_purpose(h) -> None:
+    def fake_topic(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/conversations.setTopic" and body == {"channel": "C1", "topic": "New topic"}
+        return 200, {"ok": True, "topic": "New topic"}
+
+    h._request = fake_topic
+    out, _ = h.slack_set_channel_topic({"channel_id": "C1", "topic": "New topic"}, None)
+    assert out["topic"] == "New topic"
+
+    def fake_purpose(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/conversations.setPurpose" and body == {"channel": "C1", "purpose": "New purpose"}
+        return 200, {"ok": True, "purpose": "New purpose"}
+
+    h._request = fake_purpose
+    out, _ = h.slack_set_channel_purpose({"channel_id": "C1", "purpose": "New purpose"}, None)
+    assert out["purpose"] == "New purpose"
+    print("PASS: slack_set_channel_topic / slack_set_channel_purpose")
+
+
+def test_create_and_join_channel(h) -> None:
+    def fake_create(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/conversations.create" and body == {"name": "incident-1", "is_private": False}
+        return 200, {"ok": True, "channel": {"id": "C9", "name": "incident-1", "is_private": False}}
+
+    h._request = fake_create
+    out, _ = h.slack_create_channel({"name": "incident-1"}, None)
+    assert out["channel_id"] == "C9" and out["is_private"] is False
+
+    def fake_join(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/conversations.join" and body == {"channel": "C9"}
+        return 200, {"ok": True, "channel": {"id": "C9", "name": "incident-1"}}
+
+    h._request = fake_join
+    out, _ = h.slack_join_channel({"channel_id": "C9"}, None)
+    assert out["channel_id"] == "C9" and out["name"] == "incident-1"
+    print("PASS: slack_create_channel / slack_join_channel")
+
+
+def test_schedule_message(h) -> None:
+    def fake_schedule(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/chat.scheduleMessage" and body == {"channel": "C1", "text": "hi", "post_at": 1893456000}
+        return 200, {"ok": True, "channel": "C1", "scheduled_message_id": "Q1", "post_at": 1893456000}
+
+    h._request = fake_schedule
+    out, _ = h.slack_schedule_message({"channel_id": "C1", "text": "hi", "post_at": 1893456000}, None)
+    assert out["scheduled_message_id"] == "Q1"
+
+    try:
+        h.slack_schedule_message({"channel_id": "C1", "text": "hi", "post_at": -5}, None)
+        raise AssertionError("expected non-positive post_at rejection")
+    except RuntimeError as exc:
+        assert "positive" in str(exc)
+
+    def fake_cancel(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/chat.deleteScheduledMessage" and body == {"channel": "C1", "scheduled_message_id": "Q1"}
+        return 200, {"ok": True}
+
+    h._request = fake_cancel
+    out, _ = h.slack_cancel_scheduled_message({"channel_id": "C1", "scheduled_message_id": "Q1"}, None)
+    assert out["scheduled_message_id"] == "Q1"
+    print("PASS: slack_schedule_message (post_at validation) / slack_cancel_scheduled_message")
+
+
 def main() -> int:
     h = load_handler()
     test_get_team_info(h)
@@ -370,6 +544,15 @@ def main() -> int:
     test_get_dnd_status(h)
     test_require_id_validation(h)
     test_bounded_limit(h)
+    test_post_message(h)
+    test_post_ephemeral(h)
+    test_reactions(h)
+    test_pins(h)
+    test_bookmarks(h)
+    test_reminders(h)
+    test_channel_topic_purpose(h)
+    test_create_and_join_channel(h)
+    test_schedule_message(h)
     print("COMMAND LOGIC TESTS PASSED")
     return 0
 

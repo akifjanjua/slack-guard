@@ -24,6 +24,23 @@ EXPECTED_COMMANDS = {
     "slack.list_usergroups": "read",
     "slack.list_files": "read",
     "slack.get_dnd_status": "read",
+    "slack.post_message": "write_requires_approval",
+    "slack.post_ephemeral": "write_requires_approval",
+    "slack.add_reaction": "write_requires_approval",
+    "slack.remove_reaction": "write_requires_approval",
+    "slack.add_pin": "write_requires_approval",
+    "slack.remove_pin": "write_requires_approval",
+    "slack.add_bookmark": "write_requires_approval",
+    "slack.edit_bookmark": "write_requires_approval",
+    "slack.remove_bookmark": "write_requires_approval",
+    "slack.add_reminder": "write_requires_approval",
+    "slack.complete_reminder": "write_requires_approval",
+    "slack.set_channel_topic": "write_requires_approval",
+    "slack.set_channel_purpose": "write_requires_approval",
+    "slack.create_channel": "write_requires_approval",
+    "slack.join_channel": "write_requires_approval",
+    "slack.schedule_message": "write_requires_approval",
+    "slack.cancel_scheduled_message": "write_requires_approval",
 }
 
 FORBIDDEN_SOURCE_PATTERNS = {
@@ -178,9 +195,17 @@ def main() -> int:
                     "guidance instead of a bare field"
                 )
 
+        # Unlike Notion Guard (where every write was roughly equally
+        # consequential), Slack Guard's own 3-tier design deliberately
+        # distinguishes low-risk writes (post a message, add a reaction) from
+        # high-risk ones (archive a channel, remove a person) - so risk here
+        # must be a real, meaningful label rather than forced up to
+        # medium/high regardless of what the command actually does.
         if expected_mode == "write_requires_approval":
-            if command.get("risk") not in {"medium", "high"}:
-                fail(f"{command_id}: write risk must be medium or high")
+            if command.get("risk") not in {"low", "medium", "high"}:
+                fail(f"{command_id}: write risk must be low, medium, or high")
+        if expected_mode == "read" and command.get("risk") != "low":
+            fail(f"{command_id}: read risk must be low")
 
     for label, pattern in FORBIDDEN_SOURCE_PATTERNS.items():
         if re.search(pattern, source):

@@ -683,3 +683,262 @@ def slack_get_dnd_status(inputs, stamp):
         "next_dnd_end_ts": data.get("next_dnd_end_ts"),
         "snooze_enabled": bool(data.get("snooze_enabled")),
     }, None
+
+
+# --- Tier 2: low-risk writes, execute with a receipt (no additional airlock) ---
+
+
+def slack_post_message(inputs, stamp):
+    """Post a message to a channel, or reply in a thread if thread_ts is given."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    text = _require(inputs.get("text"), "text")
+    body = {"channel": channel_id, "text": text}
+    thread_ts = inputs.get("thread_ts")
+    if isinstance(thread_ts, str) and thread_ts.strip():
+        body["thread_ts"] = thread_ts.strip()
+    api_key = _load_api_key()
+    status, data = _request("POST", "/chat.postMessage", api_key, body=body, is_write=True)
+    return {
+        "ok": True,
+        "http_status": status,
+        "channel_id": data.get("channel"),
+        "message_ts": data.get("ts"),
+    }, None
+
+
+def slack_post_ephemeral(inputs, stamp):
+    """Post a message visible to only one user in a channel."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    user_id = _require_id(inputs.get("user_id"), "user_id")
+    text = _require(inputs.get("text"), "text")
+    body = {"channel": channel_id, "user": user_id, "text": text}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/chat.postEphemeral", api_key, body=body, is_write=True)
+    return {
+        "ok": True,
+        "http_status": status,
+        "message_ts": data.get("message_ts"),
+    }, None
+
+
+def slack_add_reaction(inputs, stamp):
+    """Add an emoji reaction to a message."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    timestamp = _require(inputs.get("timestamp"), "timestamp")
+    name = _require(inputs.get("name"), "name")
+    body = {"channel": channel_id, "timestamp": timestamp, "name": name}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/reactions.add", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "timestamp": timestamp, "name": name}, None
+
+
+def slack_remove_reaction(inputs, stamp):
+    """Remove an emoji reaction from a message."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    timestamp = _require(inputs.get("timestamp"), "timestamp")
+    name = _require(inputs.get("name"), "name")
+    body = {"channel": channel_id, "timestamp": timestamp, "name": name}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/reactions.remove", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "timestamp": timestamp, "name": name}, None
+
+
+def slack_add_pin(inputs, stamp):
+    """Pin a message to a channel."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    timestamp = _require(inputs.get("timestamp"), "timestamp")
+    body = {"channel": channel_id, "timestamp": timestamp}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/pins.add", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "timestamp": timestamp}, None
+
+
+def slack_remove_pin(inputs, stamp):
+    """Unpin a message from a channel."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    timestamp = _require(inputs.get("timestamp"), "timestamp")
+    body = {"channel": channel_id, "timestamp": timestamp}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/pins.remove", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "timestamp": timestamp}, None
+
+
+def slack_add_bookmark(inputs, stamp):
+    """Add a link bookmark to a channel."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    title = _require(inputs.get("title"), "title")
+    link = _require(inputs.get("link"), "link")
+    body = {"channel_id": channel_id, "title": title, "link": link, "type": "link"}
+    emoji = inputs.get("emoji")
+    if isinstance(emoji, str) and emoji.strip():
+        body["emoji"] = emoji.strip()
+    api_key = _load_api_key()
+    status, data = _request("POST", "/bookmarks.add", api_key, body=body, is_write=True)
+    bookmark = data.get("bookmark") or {}
+    return {
+        "ok": True,
+        "http_status": status,
+        "bookmark_id": bookmark.get("id"),
+        "title": bookmark.get("title"),
+        "link": bookmark.get("link"),
+    }, None
+
+
+def slack_edit_bookmark(inputs, stamp):
+    """Edit an existing channel bookmark's title, link, or emoji."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    bookmark_id = _require(inputs.get("bookmark_id"), "bookmark_id")
+    title = inputs.get("title")
+    link = inputs.get("link")
+    emoji = inputs.get("emoji")
+    if not any(isinstance(v, str) and v.strip() for v in (title, link, emoji)):
+        raise RuntimeError("Provide at least one of title, link, or emoji to edit.")
+    body = {"channel_id": channel_id, "bookmark_id": bookmark_id}
+    if isinstance(title, str) and title.strip():
+        body["title"] = title.strip()
+    if isinstance(link, str) and link.strip():
+        body["link"] = link.strip()
+    if isinstance(emoji, str) and emoji.strip():
+        body["emoji"] = emoji.strip()
+    api_key = _load_api_key()
+    status, data = _request("POST", "/bookmarks.edit", api_key, body=body, is_write=True)
+    bookmark = data.get("bookmark") or {}
+    return {
+        "ok": True,
+        "http_status": status,
+        "bookmark_id": bookmark.get("id"),
+        "title": bookmark.get("title"),
+        "link": bookmark.get("link"),
+    }, None
+
+
+def slack_remove_bookmark(inputs, stamp):
+    """Remove a bookmark from a channel."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    bookmark_id = _require(inputs.get("bookmark_id"), "bookmark_id")
+    body = {"channel_id": channel_id, "bookmark_id": bookmark_id}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/bookmarks.remove", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "bookmark_id": bookmark_id}, None
+
+
+def slack_add_reminder(inputs, stamp):
+    """Create a reminder for a user. time accepts a Unix timestamp or a
+    Slack-understood phrase such as 'in 5 minutes' or 'tomorrow at 9am'."""
+    text = _require(inputs.get("text"), "text")
+    time_value = _require(inputs.get("time"), "time")
+    user_id = inputs.get("user_id")
+    body = {"text": text, "time": time_value}
+    if isinstance(user_id, str) and user_id.strip():
+        body["user"] = _require_id(user_id, "user_id")
+    api_key = _load_api_key()
+    status, data = _request("POST", "/reminders.add", api_key, body=body, is_write=True)
+    reminder = data.get("reminder") or {}
+    return {
+        "ok": True,
+        "http_status": status,
+        "reminder_id": reminder.get("id"),
+        "text": reminder.get("text"),
+        "time": reminder.get("time"),
+    }, None
+
+
+def slack_complete_reminder(inputs, stamp):
+    """Mark a reminder as complete."""
+    reminder_id = _require(inputs.get("reminder_id"), "reminder_id")
+    body = {"reminder": reminder_id}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/reminders.complete", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "reminder_id": reminder_id}, None
+
+
+def slack_set_channel_topic(inputs, stamp):
+    """Set a channel's topic."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    topic = _require(inputs.get("topic"), "topic")
+    body = {"channel": channel_id, "topic": topic}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/conversations.setTopic", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "topic": data.get("topic")}, None
+
+
+def slack_set_channel_purpose(inputs, stamp):
+    """Set a channel's purpose."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    purpose = _require(inputs.get("purpose"), "purpose")
+    body = {"channel": channel_id, "purpose": purpose}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/conversations.setPurpose", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "purpose": data.get("purpose")}, None
+
+
+def slack_create_channel(inputs, stamp):
+    """Create a new channel."""
+    name = _require(inputs.get("name"), "name")
+    is_private = bool(inputs.get("is_private"))
+    body = {"name": name, "is_private": is_private}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/conversations.create", api_key, body=body, is_write=True)
+    channel = data.get("channel") or {}
+    return {
+        "ok": True,
+        "http_status": status,
+        "channel_id": channel.get("id"),
+        "name": channel.get("name"),
+        "is_private": bool(channel.get("is_private")),
+    }, None
+
+
+def slack_join_channel(inputs, stamp):
+    """Join a public channel."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    body = {"channel": channel_id}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/conversations.join", api_key, body=body, is_write=True)
+    channel = data.get("channel") or {}
+    return {
+        "ok": True,
+        "http_status": status,
+        "channel_id": channel.get("id") or channel_id,
+        "name": channel.get("name"),
+    }, None
+
+
+def slack_schedule_message(inputs, stamp):
+    """Schedule a message to post at a future Unix timestamp."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    text = _require(inputs.get("text"), "text")
+    post_at = inputs.get("post_at")
+    if isinstance(post_at, float) and not post_at.is_integer():
+        raise RuntimeError("post_at must be an integer Unix timestamp.")
+    try:
+        post_at = int(post_at)
+    except (TypeError, ValueError):
+        raise RuntimeError("post_at must be an integer Unix timestamp.") from None
+    if post_at <= 0:
+        raise RuntimeError("post_at must be a positive Unix timestamp.")
+    body = {"channel": channel_id, "text": text, "post_at": post_at}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/chat.scheduleMessage", api_key, body=body, is_write=True)
+    return {
+        "ok": True,
+        "http_status": status,
+        "channel_id": data.get("channel"),
+        "scheduled_message_id": data.get("scheduled_message_id"),
+        "post_at": data.get("post_at"),
+    }, None
+
+
+def slack_cancel_scheduled_message(inputs, stamp):
+    """Cancel a previously scheduled message before it posts."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    scheduled_message_id = _require(inputs.get("scheduled_message_id"), "scheduled_message_id")
+    body = {"channel": channel_id, "scheduled_message_id": scheduled_message_id}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/chat.deleteScheduledMessage", api_key, body=body, is_write=True)
+    return {
+        "ok": True,
+        "http_status": status,
+        "channel_id": channel_id,
+        "scheduled_message_id": scheduled_message_id,
+    }, None

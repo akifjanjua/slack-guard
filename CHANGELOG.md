@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0
+
+All 17 Tier 2 low-risk writes are now live against the real Slack Web API, completing Tier 2 per the build order:
+
+- `slack.post_message` (`chat.postMessage`, optional `thread_ts` reply) and `slack.post_ephemeral` (`chat.postEphemeral`).
+- `slack.add_reaction` / `slack.remove_reaction` (`reactions.add` / `remove`).
+- `slack.add_pin` / `slack.remove_pin` (`pins.add` / `remove`).
+- `slack.add_bookmark` / `slack.edit_bookmark` / `slack.remove_bookmark` (`bookmarks.add` / `edit` / `remove`) — `edit_bookmark` requires at least one of `title`/`link`/`emoji`.
+- `slack.add_reminder` / `slack.complete_reminder` (`reminders.add` / `complete`).
+- `slack.set_channel_topic` / `slack.set_channel_purpose` (`conversations.setTopic` / `setPurpose`).
+- `slack.create_channel` (`conversations.create`) and `slack.join_channel` (`conversations.join`).
+- `slack.schedule_message` / `slack.cancel_scheduled_message` (`chat.scheduleMessage` / `deleteScheduledMessage`) — `post_at` validated as a positive integer Unix timestamp before any network call.
+
+All Tier 2 commands are `write_requires_approval`, `risk: "low"` — the same Preview → Approve → Execute ceremony as a read, no additional airlock. `tools/validate_release.py`'s write-risk check was relaxed from "must be medium/high" (a Notion Guard-specific assumption that doesn't fit Slack Guard's deliberate 3-tier risk model) to "must be low/medium/high, matching the declared mode."
+
+Moved the growing Bot Token Scope table out of `README.md` into a dedicated [docs/SCOPES.md](docs/SCOPES.md) to stay under the contest's 500-word README cap as the command count grows; README now links to it.
+
+Verified live against the real workspace: firing `slack.list_users` earlier (v0.2.0 testing) had already surfaced a real `missing_scope` failure and confirmed the `failed_safely` receipt path works correctly against Slack's actual API, not just mocked tests — the same transport code now backs all 17 new writes.
+
+Next up, per the build order: the approval-airlock plumbing, then Tier 3 high-risk writes, least-to-most catastrophic, starting with `rename_channel`.
+
 ## 0.2.0
 
 All 11 Tier 1 read commands are now live against the real Slack Web API, completing Tier 1 per the build order:
