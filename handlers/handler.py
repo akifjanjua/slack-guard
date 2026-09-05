@@ -20,14 +20,17 @@ as a secondary transport-level one (429 rate limit, 5xx server error).
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
+import os
 import re
 import ssl
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 API_HOST = "slack.com"
 API_BASE = "https://slack.com/api"
@@ -224,6 +227,68 @@ def _load_client_credentials():
     return client_id, client_secret
 
 
+_APPROVAL_MAX_AGE_SECONDS = 30 * 60
+
+
+def _check_approval_freshness(command_id, inputs):
+    """Reject a write whose bound approval is older than
+    _APPROVAL_MAX_AGE_SECONDS. RailCall approvals never platform-expire, so
+    single-use consumption is the only other protection against a delayed or
+    replayed execution of an old human decision - found as a real gap by
+    running the shweta/conformance marketplace module against this handler
+    (check_airlock_coverage flags every write command lacking this).
+
+    Recomputes the same idempotency key RailCall's own airlock uses to key
+    WS/pending_approvals.json (idem_ + sha256(command_id + "|" +
+    canonical(inputs))[:24]), verified directly against
+    workbench/approval_airlock.py's own idempotency_key()/canonical()
+    functions rather than assumed, and reads that record's own approval
+    timestamp - the platform sets no field on inputs/stamp that would let a
+    handler see this any other way.
+
+    Fails open: if the record, its approval, or its timestamp isn't
+    reachable or readable for any reason, this does not block. A missing or
+    unreadable piece of platform bookkeeping is not evidence the approval is
+    stale, and refusing a legitimately-approved write over an internal
+    lookup failure would be a worse failure mode than the gap this closes.
+    """
+    helpers = globals().get("__rc_helpers__")
+    if not isinstance(helpers, dict):
+        return
+    ws = helpers.get("WS")
+    jload = helpers.get("jload")
+    if not ws or not callable(jload):
+        return
+    canonical = json.dumps(inputs or {}, sort_keys=True, separators=(",", ":"), default=str)
+    idem = "idem_" + hashlib.sha256((command_id + "|" + canonical).encode("utf-8")).hexdigest()[:24]
+    try:
+        pending = jload(os.path.join(ws, "pending_approvals.json"), {})
+    except Exception:
+        return
+    if not isinstance(pending, dict):
+        return
+    record = pending.get(idem)
+    if not isinstance(record, dict):
+        return
+    approval = record.get("approval")
+    approved_at = approval.get("timestamp") if isinstance(approval, dict) else None
+    if not isinstance(approved_at, str) or not approved_at:
+        return
+    try:
+        approved_time = datetime.strptime(approved_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return
+    age_seconds = (datetime.now(timezone.utc) - approved_time).total_seconds()
+    if age_seconds > _APPROVAL_MAX_AGE_SECONDS:
+        raise RuntimeError(
+            f"This approval is {int(age_seconds // 60)} minutes old, over the "
+            f"{_APPROVAL_MAX_AGE_SECONDS // 60}-minute freshness limit. RailCall "
+            "approvals never expire on their own, so Slack Guard rejects a "
+            "stale one to bound how long a delayed or replayed execution can "
+            "act on an old human decision. Preview and approve again to execute now."
+        )
+
+
 # Reads have no side effect, so a transient failure can be retried safely;
 # writes never are, since a retry could duplicate an unknown-outcome mutation.
 _READ_RETRY_STATUSES = (429, 502, 503, 504)
@@ -409,10 +474,27 @@ def _bounded_limit(value, default, maximum):
     return min(parsed, maximum)
 
 
+def _as_dict(value):
+    """Treat a JSON field that should be an object as {} unless it actually
+    is one. `data.get(X) or {}` looks equivalent but isn't: it only degrades
+    a MISSING or falsy field (None, {}, "", 0) to {}, and calls .get() on
+    whatever else is there unchanged - so a malformed/unexpected response
+    where that field is present but the WRONG type (a string, a list, a
+    bool, a number) crashes with an uncaught AttributeError instead of the
+    clean RuntimeError every other malformed-response path in this module
+    raises. Used for secondary response objects (an echoed-back channel/
+    bookmark/reminder/file, pagination metadata) where the write itself
+    already succeeded and gracefully degrading to empty is correct -
+    contrast with slack_get_team_info/get_channel_info/get_user_info, which
+    raise outright when their OWN primary response object is malformed,
+    since there nothing meaningful can be returned at all."""
+    return value if isinstance(value, dict) else {}
+
+
 def _simplify_user(user):
     if not isinstance(user, dict):
         return {}
-    profile = user.get("profile") or {}
+    profile = _as_dict(user.get("profile"))
     entry = {
         "id": user.get("id"),
         "name": user.get("name"),
@@ -431,8 +513,8 @@ def _simplify_user(user):
 def _simplify_channel(channel):
     if not isinstance(channel, dict):
         return {}
-    topic = channel.get("topic") or {}
-    purpose = channel.get("purpose") or {}
+    topic = _as_dict(channel.get("topic"))
+    purpose = _as_dict(channel.get("purpose"))
     return {
         "id": channel.get("id"),
         "name": channel.get("name"),
@@ -501,7 +583,7 @@ def slack_list_users(inputs, stamp):
     if not isinstance(members, list):
         raise RuntimeError("Slack did not return a members list.")
     simplified = [_simplify_user(m) for m in members if isinstance(m, dict)]
-    next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+    next_cursor = _as_dict(data.get("response_metadata")).get("next_cursor") or ""
     return {
         "ok": True,
         "http_status": status,
@@ -566,7 +648,7 @@ def slack_list_channels(inputs, stamp):
     if not isinstance(channels, list):
         raise RuntimeError("Slack did not return a channels list.")
     simplified = [_simplify_channel(c) for c in channels if isinstance(c, dict)]
-    next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+    next_cursor = _as_dict(data.get("response_metadata")).get("next_cursor") or ""
     return {
         "ok": True,
         "http_status": status,
@@ -619,7 +701,7 @@ def slack_list_channel_members(inputs, stamp):
     if not isinstance(members, list):
         raise RuntimeError("Slack did not return a members list.")
     member_ids = [m for m in members if isinstance(m, str)]
-    next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+    next_cursor = _as_dict(data.get("response_metadata")).get("next_cursor") or ""
     return {
         "ok": True,
         "http_status": status,
@@ -648,7 +730,7 @@ def slack_get_channel_history(inputs, stamp):
     if not isinstance(messages, list):
         raise RuntimeError("Slack did not return a messages list.")
     simplified = [_simplify_message(m) for m in messages if isinstance(m, dict)]
-    next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+    next_cursor = _as_dict(data.get("response_metadata")).get("next_cursor") or ""
     return {
         "ok": True,
         "http_status": status,
@@ -674,7 +756,7 @@ def slack_get_thread_replies(inputs, stamp):
     if not isinstance(messages, list):
         raise RuntimeError("Slack did not return a messages list.")
     simplified = [_simplify_message(m) for m in messages if isinstance(m, dict)]
-    next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+    next_cursor = _as_dict(data.get("response_metadata")).get("next_cursor") or ""
     return {
         "ok": True,
         "http_status": status,
@@ -757,7 +839,7 @@ def slack_list_files(inputs, stamp):
             # command, Tier 3, gets its own dedicated redaction handling).
             "permalink": f.get("permalink"),
         })
-    paging = data.get("paging") or {}
+    paging = _as_dict(data.get("paging"))
     return {
         "ok": True,
         "http_status": status,
@@ -789,6 +871,7 @@ def slack_get_dnd_status(inputs, stamp):
 
 def slack_post_message(inputs, stamp):
     """Post a message to a channel, or reply in a thread if thread_ts is given."""
+    _check_approval_freshness("slack.post_message", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     text = _require(inputs.get("text"), "text")
     body = {"channel": channel_id, "text": text}
@@ -807,6 +890,7 @@ def slack_post_message(inputs, stamp):
 
 def slack_post_ephemeral(inputs, stamp):
     """Post a message visible to only one user in a channel."""
+    _check_approval_freshness("slack.post_ephemeral", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     user_id = _require_id(inputs.get("user_id"), "user_id")
     text = _require(inputs.get("text"), "text")
@@ -822,6 +906,7 @@ def slack_post_ephemeral(inputs, stamp):
 
 def slack_add_reaction(inputs, stamp):
     """Add an emoji reaction to a message."""
+    _check_approval_freshness("slack.add_reaction", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     timestamp = _require(inputs.get("timestamp"), "timestamp")
     name = _require(inputs.get("name"), "name")
@@ -833,6 +918,7 @@ def slack_add_reaction(inputs, stamp):
 
 def slack_remove_reaction(inputs, stamp):
     """Remove an emoji reaction from a message."""
+    _check_approval_freshness("slack.remove_reaction", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     timestamp = _require(inputs.get("timestamp"), "timestamp")
     name = _require(inputs.get("name"), "name")
@@ -844,6 +930,7 @@ def slack_remove_reaction(inputs, stamp):
 
 def slack_add_pin(inputs, stamp):
     """Pin a message to a channel."""
+    _check_approval_freshness("slack.add_pin", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     timestamp = _require(inputs.get("timestamp"), "timestamp")
     body = {"channel": channel_id, "timestamp": timestamp}
@@ -854,6 +941,7 @@ def slack_add_pin(inputs, stamp):
 
 def slack_remove_pin(inputs, stamp):
     """Unpin a message from a channel."""
+    _check_approval_freshness("slack.remove_pin", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     timestamp = _require(inputs.get("timestamp"), "timestamp")
     body = {"channel": channel_id, "timestamp": timestamp}
@@ -864,6 +952,7 @@ def slack_remove_pin(inputs, stamp):
 
 def slack_add_bookmark(inputs, stamp):
     """Add a link bookmark to a channel."""
+    _check_approval_freshness("slack.add_bookmark", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     title = _require(inputs.get("title"), "title")
     link = _require(inputs.get("link"), "link")
@@ -873,7 +962,7 @@ def slack_add_bookmark(inputs, stamp):
         body["emoji"] = emoji.strip()
     api_key = _load_api_key()
     status, data = _request("POST", "/bookmarks.add", api_key, body=body, is_write=True)
-    bookmark = data.get("bookmark") or {}
+    bookmark = _as_dict(data.get("bookmark"))
     return {
         "ok": True,
         "http_status": status,
@@ -885,6 +974,7 @@ def slack_add_bookmark(inputs, stamp):
 
 def slack_edit_bookmark(inputs, stamp):
     """Edit an existing channel bookmark's title, link, or emoji."""
+    _check_approval_freshness("slack.edit_bookmark", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     bookmark_id = _require(inputs.get("bookmark_id"), "bookmark_id")
     title = inputs.get("title")
@@ -901,7 +991,7 @@ def slack_edit_bookmark(inputs, stamp):
         body["emoji"] = emoji.strip()
     api_key = _load_api_key()
     status, data = _request("POST", "/bookmarks.edit", api_key, body=body, is_write=True)
-    bookmark = data.get("bookmark") or {}
+    bookmark = _as_dict(data.get("bookmark"))
     return {
         "ok": True,
         "http_status": status,
@@ -913,6 +1003,7 @@ def slack_edit_bookmark(inputs, stamp):
 
 def slack_remove_bookmark(inputs, stamp):
     """Remove a bookmark from a channel."""
+    _check_approval_freshness("slack.remove_bookmark", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     bookmark_id = _require(inputs.get("bookmark_id"), "bookmark_id")
     body = {"channel_id": channel_id, "bookmark_id": bookmark_id}
@@ -924,6 +1015,7 @@ def slack_remove_bookmark(inputs, stamp):
 def slack_add_reminder(inputs, stamp):
     """Create a reminder for a user. time accepts a Unix timestamp or a
     Slack-understood phrase such as 'in 5 minutes' or 'tomorrow at 9am'."""
+    _check_approval_freshness("slack.add_reminder", inputs)
     text = _require(inputs.get("text"), "text")
     time_value = _require(inputs.get("time"), "time")
     user_id = inputs.get("user_id")
@@ -932,7 +1024,7 @@ def slack_add_reminder(inputs, stamp):
         body["user"] = _require_id(user_id, "user_id")
     api_key = _load_api_key()
     status, data = _request("POST", "/reminders.add", api_key, body=body, is_write=True)
-    reminder = data.get("reminder") or {}
+    reminder = _as_dict(data.get("reminder"))
     return {
         "ok": True,
         "http_status": status,
@@ -944,6 +1036,7 @@ def slack_add_reminder(inputs, stamp):
 
 def slack_complete_reminder(inputs, stamp):
     """Mark a reminder as complete."""
+    _check_approval_freshness("slack.complete_reminder", inputs)
     reminder_id = _require(inputs.get("reminder_id"), "reminder_id")
     body = {"reminder": reminder_id}
     api_key = _load_api_key()
@@ -953,6 +1046,7 @@ def slack_complete_reminder(inputs, stamp):
 
 def slack_set_channel_topic(inputs, stamp):
     """Set a channel's topic."""
+    _check_approval_freshness("slack.set_channel_topic", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     topic = _require(inputs.get("topic"), "topic")
     body = {"channel": channel_id, "topic": topic}
@@ -963,6 +1057,7 @@ def slack_set_channel_topic(inputs, stamp):
 
 def slack_set_channel_purpose(inputs, stamp):
     """Set a channel's purpose."""
+    _check_approval_freshness("slack.set_channel_purpose", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     purpose = _require(inputs.get("purpose"), "purpose")
     body = {"channel": channel_id, "purpose": purpose}
@@ -973,12 +1068,13 @@ def slack_set_channel_purpose(inputs, stamp):
 
 def slack_create_channel(inputs, stamp):
     """Create a new channel."""
+    _check_approval_freshness("slack.create_channel", inputs)
     name = _require(inputs.get("name"), "name")
     is_private = bool(inputs.get("is_private"))
     body = {"name": name, "is_private": is_private}
     api_key = _load_api_key()
     status, data = _request("POST", "/conversations.create", api_key, body=body, is_write=True)
-    channel = data.get("channel") or {}
+    channel = _as_dict(data.get("channel"))
     return {
         "ok": True,
         "http_status": status,
@@ -990,11 +1086,12 @@ def slack_create_channel(inputs, stamp):
 
 def slack_join_channel(inputs, stamp):
     """Join a public channel."""
+    _check_approval_freshness("slack.join_channel", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     body = {"channel": channel_id}
     api_key = _load_api_key()
     status, data = _request("POST", "/conversations.join", api_key, body=body, is_write=True)
-    channel = data.get("channel") or {}
+    channel = _as_dict(data.get("channel"))
     return {
         "ok": True,
         "http_status": status,
@@ -1005,6 +1102,7 @@ def slack_join_channel(inputs, stamp):
 
 def slack_schedule_message(inputs, stamp):
     """Schedule a message to post at a future Unix timestamp."""
+    _check_approval_freshness("slack.schedule_message", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     text = _require(inputs.get("text"), "text")
     post_at = inputs.get("post_at")
@@ -1030,6 +1128,7 @@ def slack_schedule_message(inputs, stamp):
 
 def slack_cancel_scheduled_message(inputs, stamp):
     """Cancel a previously scheduled message before it posts."""
+    _check_approval_freshness("slack.cancel_scheduled_message", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     scheduled_message_id = _require(inputs.get("scheduled_message_id"), "scheduled_message_id")
     body = {"channel": channel_id, "scheduled_message_id": scheduled_message_id}
@@ -1048,12 +1147,13 @@ def slack_cancel_scheduled_message(inputs, stamp):
 
 def slack_rename_channel(inputs, stamp):
     """Rename a channel."""
+    _check_approval_freshness("slack.rename_channel", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     name = _require(inputs.get("name"), "name")
     body = {"channel": channel_id, "name": name}
     api_key = _load_api_key()
     status, data = _request("POST", "/conversations.rename", api_key, body=body, is_write=True)
-    channel = data.get("channel") or {}
+    channel = _as_dict(data.get("channel"))
     return {
         "ok": True,
         "http_status": status,
@@ -1065,6 +1165,7 @@ def slack_rename_channel(inputs, stamp):
 def slack_archive_channel(inputs, stamp):
     """Archive a channel. Members can no longer post; use
     slack.unarchive_channel to reverse."""
+    _check_approval_freshness("slack.archive_channel", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     body = {"channel": channel_id}
     api_key = _load_api_key()
@@ -1074,6 +1175,7 @@ def slack_archive_channel(inputs, stamp):
 
 def slack_unarchive_channel(inputs, stamp):
     """Restore a previously archived channel."""
+    _check_approval_freshness("slack.unarchive_channel", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     body = {"channel": channel_id}
     api_key = _load_api_key()
@@ -1083,6 +1185,7 @@ def slack_unarchive_channel(inputs, stamp):
 
 def slack_delete_message(inputs, stamp):
     """Permanently delete a message. Irreversible - Slack has no undo."""
+    _check_approval_freshness("slack.delete_message", inputs)
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     timestamp = _require(inputs.get("timestamp"), "timestamp")
     body = {"channel": channel_id, "ts": timestamp}
@@ -1095,6 +1198,7 @@ def slack_kick_user_from_channel(inputs, stamp):
     """Remove a member from a channel. Hard-blocked under the Open Community
     Hardened preset (see README - Governance presets): a membership change,
     socially loaded and easy to abuse on a large open workspace."""
+    _check_approval_freshness("slack.kick_user_from_channel", inputs)
     _enforce_preset_block("slack.kick_user_from_channel")
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     user_id = _require_id(inputs.get("user_id"), "user_id")
@@ -1108,6 +1212,7 @@ def slack_invite_to_channel(inputs, stamp):
     """Add one or more members to a channel. Hard-blocked under the Open
     Community Hardened preset: adds people to potentially sensitive content,
     same reasoning as the kick side of a membership change."""
+    _check_approval_freshness("slack.invite_to_channel", inputs)
     _enforce_preset_block("slack.invite_to_channel")
     channel_id = _require_id(inputs.get("channel_id"), "channel_id")
     user_ids = inputs.get("user_ids")
@@ -1116,12 +1221,13 @@ def slack_invite_to_channel(inputs, stamp):
     body = {"channel": channel_id, "users": user_ids.strip()}
     api_key = _load_api_key()
     status, data = _request("POST", "/conversations.invite", api_key, body=body, is_write=True)
-    channel = data.get("channel") or {}
+    channel = _as_dict(data.get("channel"))
     return {"ok": True, "http_status": status, "channel_id": channel.get("id") or channel_id}, None
 
 
 def slack_delete_file(inputs, stamp):
     """Permanently delete a file. Irreversible."""
+    _check_approval_freshness("slack.delete_file", inputs)
     file_id = _require(inputs.get("file_id"), "file_id")
     body = {"file": file_id}
     api_key = _load_api_key()
@@ -1134,6 +1240,7 @@ def slack_update_usergroup_members(inputs, stamp):
     an existing member removes them. Hard-blocked under the Open Community
     Hardened preset: rewrites who a broadcast @-mention group pings, high
     blast radius, easy to abuse for spam or exclusion."""
+    _check_approval_freshness("slack.update_usergroup_members", inputs)
     _enforce_preset_block("slack.update_usergroup_members")
     usergroup_id = _require(inputs.get("usergroup_id"), "usergroup_id")
     user_ids = inputs.get("user_ids")
@@ -1166,12 +1273,13 @@ def slack_share_file_publicly(inputs, stamp):
     redacted from any error/note text the same way a token would be (see
     _redact / SECURITY.md), since that path has no legitimate reason to
     echo it."""
+    _check_approval_freshness("slack.share_file_publicly", inputs)
     _enforce_preset_block("slack.share_file_publicly")
     file_id = _require(inputs.get("file_id"), "file_id")
     body = {"file": file_id}
     api_key = _load_api_key()
     status, data = _request("POST", "/files.sharedPublicURL", api_key, body=body, is_write=True)
-    f = data.get("file") or {}
+    f = _as_dict(data.get("file"))
     return {
         "ok": True,
         "http_status": status,
@@ -1191,6 +1299,7 @@ def slack_uninstall_app(inputs, stamp):
     the module's ability to do anything else in this workspace. Not
     hard-blocked under any preset - a legitimate operator must always be
     able to reach their own break-glass switch."""
+    _check_approval_freshness("slack.uninstall_app", inputs)
     if inputs.get("confirm") != "UNINSTALL":
         raise RuntimeError(
             "confirm must be exactly 'UNINSTALL' to uninstall the Slack app. "
@@ -1213,6 +1322,7 @@ def slack_revoke_token(inputs, stamp):
     ability to do anything else in this workspace. Not hard-blocked under
     any preset - a legitimate operator must always be able to reach their
     own break-glass switch."""
+    _check_approval_freshness("slack.revoke_token", inputs)
     if inputs.get("confirm") != "REVOKE":
         raise RuntimeError(
             "confirm must be exactly 'REVOKE' to revoke the bot token. "

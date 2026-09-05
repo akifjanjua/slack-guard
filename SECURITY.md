@@ -32,6 +32,18 @@ Station's own approval-policy engine (`approval_policy.py`, `WS/approval_policy.
 
 Observer and Team Copilot do not differ in what this module enforces — both rely entirely on RailCall's own universal per-write approval requirement, with no additional hard blocks. The distinction between them is a posture recommendation for the operator, not a difference in code.
 
+## Approval freshness
+
+RailCall approvals never platform-expire — single-use consumption (an approval is bound to one exact payload hash and consumed on first execute attempt) is otherwise the only protection against a delayed or replayed execution of an old human decision. All 28 write commands call `_check_approval_freshness()` as their first statement and refuse to execute an approval older than 30 minutes.
+
+The check recomputes the same idempotency key RailCall's own airlock uses to key `WS/pending_approvals.json` — `idem_ + sha256(command_id + "|" + canonical(inputs))[:24]` — verified directly against `workbench/approval_airlock.py`'s own `idempotency_key()`/`canonical()` functions on this install rather than assumed, and reads that record's own `approval.timestamp` via the `WS`/`jload` helpers RailCall injects into every module's namespace. It **fails open**: if the record, its approval, or its timestamp isn't reachable or readable for any reason, the write proceeds exactly as before — a missing or unreadable piece of platform bookkeeping is not evidence of staleness, and refusing a legitimately-approved write over an internal lookup failure would be a worse failure mode than the gap this closes.
+
+This gap was found, and the fix verified, by running the free third-party `shweta/conformance` marketplace module's `check_all` against Slack Guard's installed handler — independent of this repo's own test suite. `tools/command_logic_test.py`'s `test_approval_freshness` covers the fresh/stale/missing-record/not-yet-approved/different-payload cases directly, plus a sweep confirming all 28 write commands reject a stale approval before any network attempt.
+
+## Malformed-response guarding
+
+`_as_dict()` treats a JSON field that should be an object as `{}` unless it actually is one. The naive `data.get(X) or {}` idiom looks equivalent but only degrades a *missing or falsy* field — a field present with the *wrong type* (Slack returning a string, list, bool, or number where an object was expected) still crashes with an uncaught `AttributeError` on the next `.get()` call. This affected 13 call sites across both reads (pagination metadata) and writes (echoed-back channel/bookmark/reminder/file objects) before being fixed uniformly. `tools/command_logic_test.py`'s `test_as_dict_guards_malformed_nested_responses` asserts several of these degrade cleanly instead of crashing. This is distinct from `slack_get_team_info`/`get_channel_info`/`get_user_info`, which correctly raise a clean `RuntimeError` when their own *primary* response object is malformed, since there nothing meaningful can be returned at all — `_as_dict()` is only for secondary/echoed-back fields where the write already succeeded and gracefully degrading is the right call.
+
 ## Slack's error model
 
 Unlike Notion Guard's/Linear Guard's REST APIs, the Slack Web API always returns HTTP 200 for a well-formed request and signals failure through a JSON body — `{"ok": false, "error": "<code>"}` — rather than an HTTP status code. The handler treats `{"ok": false}` as a definitive, confirmed rejection (not a transport-level ambiguity) for both reads and writes; only a true transport-level failure (HTTP 429 rate limit, 5xx server error, connection failure) triggers the "outcome is unknown" write-safety path described below.

@@ -61,8 +61,8 @@ python tools/release_acceptance_test.py
 Expected assets (version segment tracks `module.json`'s `version` field):
 
 ```text
-dist/slack-guard-v0.1.0.zip
-dist/slack-guard-v0.1.0.files.json
+dist/slack-guard-v0.4.1.zip
+dist/slack-guard-v0.4.1.files.json
 ```
 
 **Do not proceed if `release_acceptance_test.py` fails for any reason**, including the official-CLI check being unavailable — investigate and fix, don't skip.

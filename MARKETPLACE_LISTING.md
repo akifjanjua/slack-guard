@@ -4,7 +4,7 @@ Governed Slack access for teams: visibility first, then approval-gated writes as
 
 ## What it does
 
-v0.4.0 ships all 39 commands against the real Slack Web API, across all 3 risk tiers: workspace/user/channel discovery, message history, posting and replying, reactions, pins, bookmarks, reminders, channel management, scheduled messages, channel deletion/archival, membership changes, public file sharing, and break-glass token/app revocation.
+v0.4.1 ships all 39 commands against the real Slack Web API, across all 3 risk tiers: workspace/user/channel discovery, message history, posting and replying, reactions, pins, bookmarks, reminders, channel management, scheduled messages, channel deletion/archival, membership changes, public file sharing, and break-glass token/app revocation.
 
 ## Governance posture
 

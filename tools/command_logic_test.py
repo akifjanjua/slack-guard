@@ -10,8 +10,12 @@ the transport, exercise the real handler functions, assert on real output).
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import os
+import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -716,6 +720,156 @@ def test_uninstall_app_missing_client_credentials(h) -> None:
     print("PASS: slack_uninstall_app requires SLACK_CLIENT_ID/SLACK_CLIENT_SECRET configured")
 
 
+def test_as_dict_guards_malformed_nested_responses(h) -> None:
+    """A malformed-but-present nested field (a string/list/bool instead of an
+    object) must degrade to {} and produce None-ish output fields, never an
+    uncaught AttributeError. `data.get(X) or {}` looks equivalent to
+    `_as_dict(data.get(X))` but isn't: `or {}` only degrades a falsy field,
+    not a truthy-but-wrong-type one."""
+    assert h._as_dict({"a": 1}) == {"a": 1}
+    assert h._as_dict(None) == {}
+    assert h._as_dict("not-a-dict") == {}
+    assert h._as_dict(["a", "list"]) == {}
+    assert h._as_dict(True) == {}
+    assert h._as_dict(0) == {}
+
+    def fake_create_channel(method, path, api_key, body=None, query=None, is_write=False):
+        return 200, {"ok": True, "channel": "unexpectedly-a-string"}
+
+    h._request = fake_create_channel
+    out, _ = h.slack_create_channel({"name": "incident-1"}, None)
+    assert out["channel_id"] is None and out["name"] is None and out["is_private"] is False
+
+    def fake_add_bookmark(method, path, api_key, body=None, query=None, is_write=False):
+        return 200, {"ok": True, "bookmark": ["not", "a", "dict"]}
+
+    h._request = fake_add_bookmark
+    out, _ = h.slack_add_bookmark({"channel_id": "C1", "title": "T", "link": "https://x"}, None)
+    assert out["bookmark_id"] is None and out["title"] is None and out["link"] is None
+
+    def fake_share_file_publicly(method, path, api_key, body=None, query=None, is_write=False):
+        return 200, {"ok": True, "file": 12345}
+
+    h._request = fake_share_file_publicly
+    out, _ = h.slack_share_file_publicly({"file_id": "F1"}, None)
+    assert out["file_id"] == "F1" and out["permalink_public"] is None
+
+    def fake_response_metadata(method, path, api_key, body=None, query=None, is_write=False):
+        return 200, {"ok": True, "members": [], "response_metadata": "not-a-dict-either"}
+
+    h._request = fake_response_metadata
+    out, _ = h.slack_list_users({}, None)
+    assert out["next_cursor"] == "" and out["has_more"] is False
+    print("PASS: _as_dict (malformed nested channel/bookmark/file/response_metadata objects "
+          "degrade cleanly instead of crashing with AttributeError)")
+
+
+def test_approval_freshness(h) -> None:
+    """RailCall approvals never platform-expire; single-use consumption is
+    the only other protection against a delayed or replayed execution of an
+    old human decision. Found as a real gap via shweta/conformance's
+    check_airlock_coverage (WRITE_COMMAND_NO_APPROVAL_FRESHNESS_CHECK) run
+    against this handler."""
+
+    def canonical(inputs):
+        return json.dumps(inputs or {}, sort_keys=True, separators=(",", ":"), default=str)
+
+    def idem_for(cmd_id, inputs):
+        return "idem_" + hashlib.sha256((cmd_id + "|" + canonical(inputs)).encode("utf-8")).hexdigest()[:24]
+
+    def jload(path, default):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except OSError:
+            return default
+
+    def timestamp_minutes_ago(minutes):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - minutes * 60))
+
+    with tempfile.TemporaryDirectory() as ws:
+        original_helpers = h.__rc_helpers__
+        h.__rc_helpers__ = dict(original_helpers, WS=ws, jload=jload)
+        pending_path = os.path.join(ws, "pending_approvals.json")
+
+        def write_pending(entries):
+            with open(pending_path, "w", encoding="utf-8") as f:
+                json.dump(entries, f)
+
+        try:
+            post_message_inputs = {"channel_id": "C1", "text": "hi"}
+            idem = idem_for("slack.post_message", post_message_inputs)
+
+            # No pending_approvals.json at all yet -> fail open, never block.
+            h._check_approval_freshness("slack.post_message", post_message_inputs)
+
+            # Fresh approval (5 minutes old, well under the 30-minute limit) -> no block.
+            write_pending({idem: {"approval": {"timestamp": timestamp_minutes_ago(5)}}})
+            h._check_approval_freshness("slack.post_message", post_message_inputs)
+
+            # Stale approval (45 minutes old) -> blocked, message names the age and the limit.
+            write_pending({idem: {"approval": {"timestamp": timestamp_minutes_ago(45)}}})
+            try:
+                h._check_approval_freshness("slack.post_message", post_message_inputs)
+                raise AssertionError("expected a stale-approval rejection")
+            except RuntimeError as exc:
+                assert "45 minutes old" in str(exc)
+                assert "30-minute" in str(exc)
+
+            # A different payload for the same command hashes to a different idem
+            # key, so it must not be caught by another payload's stale approval.
+            h._check_approval_freshness("slack.post_message", {**post_message_inputs, "channel_id": "C2"})
+
+            # No record at all for this exact idem -> fail open, not a false block.
+            write_pending({"idem_unrelated": {"approval": {"timestamp": timestamp_minutes_ago(999)}}})
+            h._check_approval_freshness("slack.post_message", post_message_inputs)
+
+            # A row that's staged but not yet approved (approval still None) ->
+            # fail open, never a false "stale" verdict on a never-approved row.
+            write_pending({idem: {"approval": None, "status": "pending_approval"}})
+            h._check_approval_freshness("slack.post_message", post_message_inputs)
+            print(
+                "PASS: _check_approval_freshness (fresh passes, stale blocks with age+limit "
+                "in the message, wrong/missing/not-yet-approved record fails open)"
+            )
+
+            # Confirm ALL 28 write commands actually call the check, and that a
+            # stale approval blocks before any network attempt. Freshness is
+            # always the first statement in every write function (before any
+            # input validation, preset block, or confirm-phrase check), so an
+            # empty inputs dict reaches it regardless of what the command
+            # would otherwise require.
+            def poisoned_request(*args, **kwargs):
+                raise AssertionError("must not reach the network when the approval is stale")
+
+            write_commands = [
+                "post_message", "post_ephemeral", "add_reaction", "remove_reaction",
+                "add_pin", "remove_pin", "add_bookmark", "edit_bookmark", "remove_bookmark",
+                "add_reminder", "complete_reminder", "set_channel_topic", "set_channel_purpose",
+                "create_channel", "join_channel", "schedule_message", "cancel_scheduled_message",
+                "rename_channel", "archive_channel", "unarchive_channel", "delete_message",
+                "kick_user_from_channel", "invite_to_channel", "delete_file",
+                "update_usergroup_members", "share_file_publicly", "uninstall_app", "revoke_token",
+            ]
+            original_request = h._request
+            h._request = poisoned_request
+            try:
+                for name in write_commands:
+                    cmd_id = f"slack.{name}"
+                    fn = getattr(h, f"slack_{name}")
+                    write_pending({idem_for(cmd_id, {}): {"approval": {"timestamp": timestamp_minutes_ago(45)}}})
+                    try:
+                        fn({}, None)
+                        raise AssertionError(f"expected {cmd_id} to reject a stale approval")
+                    except RuntimeError as exc:
+                        assert "45 minutes old" in str(exc), f"{cmd_id}: {exc}"
+            finally:
+                h._request = original_request
+            print(f"PASS: all {len(write_commands)} write commands reject a stale approval before any network attempt")
+        finally:
+            h.__rc_helpers__ = original_helpers
+
+
 def main() -> int:
     h = load_handler()
     test_get_team_info(h)
@@ -748,6 +902,8 @@ def main() -> int:
     test_share_file_publicly_output_and_redaction(h)
     test_break_glass_confirmation(h)
     test_uninstall_app_missing_client_credentials(h)
+    test_as_dict_guards_malformed_nested_responses(h)
+    test_approval_freshness(h)
     print("COMMAND LOGIC TESTS PASSED")
     return 0
 

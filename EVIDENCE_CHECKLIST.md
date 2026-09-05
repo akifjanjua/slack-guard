@@ -3,7 +3,7 @@
 ## Strongest evidence set
 
 1. **Real Slack result** — `slack.get_team_info` returning the real connected workspace's id/name/domain.
-2. **Module loaded** — Studio's Modules tab or boot log showing Slack Guard `v0.1.0`, signature verified, 1 command, `loaded=1 rejected=0`.
+2. **Module loaded** — Studio's Modules tab or boot log showing Slack Guard's current version, signature verified, all commands registered, `loaded=1 rejected=0`.
 3. **Approved execution** — a receipt showing `"result_status": "executed"`, `"http_status": 200`, and a non-null `signature.sig`.
 4. **Independent receipt verification** — `tools/verify_module_tree.py` and/or `railcall market module verify` reporting `✓ signature valid`.
 5. **Safe smoke test** — `tools/smoke_test.py` passes against a running Studio instance.
@@ -15,4 +15,4 @@ Hide API keys, approval codes, personal email addresses, full team/user IDs beyo
 
 ## Video evidence
 
-Not yet recorded — will show: module loaded → exact payload preview → real Slack result → signed receipt verification, once enough commands exist to make a meaningful demo (this checklist and `VIDEO_SCRIPT.md` will be filled in once Tier 2 writes with the approval flow are live).
+Not yet recorded — will show: module loaded → exact payload preview → real Slack result → signed receipt verification. All 3 tiers are live as of v0.4.1, so this is now unblocked; the video and `VIDEO_SCRIPT.md` are the remaining pre-publish item (see `PUBLISH_CHECKLIST.md`).

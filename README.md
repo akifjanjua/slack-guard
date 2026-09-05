@@ -10,7 +10,7 @@ Slack Guard is a governance-first RailCall module for Slack. Built command-by-co
 |---|---|---|
 | 1 — read, executes immediately | **All 11 LIVE** | `get_team_info`, `list_users`, `get_user_info`, `list_channels`, `get_channel_info`, `list_channel_members`, `get_channel_history`, `get_thread_replies`, `list_usergroups`, `list_files`, `get_dnd_status` |
 | 2 — low-risk write, receipted | **All 17 LIVE** | `post_message`, `post_ephemeral`, `add_reaction`/`remove_reaction`, `add_pin`/`remove_pin`, `add_bookmark`/`edit_bookmark`/`remove_bookmark`, `add_reminder`/`complete_reminder`, `set_channel_topic`/`set_channel_purpose`, `create_channel`, `join_channel`, `schedule_message`/`cancel_scheduled_message` |
-| 3 — high-risk write, human airlock | **All 11 LIVE (v0.4.0)** | `rename_channel`, `archive_channel`/`unarchive_channel`, `delete_message`, `kick_user_from_channel`\*, `invite_to_channel`\*, `delete_file`, `update_usergroup_members`\*, `share_file_publicly`\*, `uninstall_app`/`revoke_token` (break-glass, last) |
+| 3 — high-risk write, human airlock | **All 11 LIVE (v0.4.1)** | `rename_channel`, `archive_channel`/`unarchive_channel`, `delete_message`, `kick_user_from_channel`\*, `invite_to_channel`\*, `delete_file`, `update_usergroup_members`\*, `share_file_publicly`\*, `uninstall_app`/`revoke_token` (break-glass, last) |
 
 \* Hard-blocked under **Open Community Hardened** — see below.
 
@@ -35,7 +35,7 @@ python -m pip install certifi
 git clone https://github.com/akifjanjua/slack-guard.git
 ```
 
-Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/` (the folder name is the module slug). Open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.4.0**, **signature verified**, **39 commands**.
+Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/` (the folder name is the module slug). Open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.4.1**, **signature verified**, **39 commands**.
 
 Post-publish: `railcall market install muhammad-akif-janjua/slack-guard`. Free (`license_required: false`).
 
