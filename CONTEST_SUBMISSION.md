@@ -10,7 +10,7 @@ https://github.com/akifjanjua/slack-guard (branch `master`) — repository visib
 
 ## Description
 
-Slack Guard is a governance-first RailCall module for Slack workspaces, built against a public 31-command, 3-tier plan (reads, low-risk writes, human-airlocked high-risk writes). v0.1.0 ships the scaffolding and one command against the real Slack Web API: `slack.get_team_info`, which confirms the connected workspace's identity and doubles as the connectivity smoke test.
+Slack Guard is a governance-first RailCall module for Slack workspaces, built against a public 31-command, 3-tier plan (reads, low-risk writes, human-airlocked high-risk writes). v0.2.0 ships all 11 Tier 1 read commands against the real Slack Web API — workspace identity, users, channels, channel membership, message history, thread replies, usergroups, files, and Do Not Disturb status.
 
 Slack Guard resolves credentials only through RailCall's vault helper, uses certifi-backed verified HTTPS, never invokes curl or another subprocess, and actively redacts credentials from errors. `module.json` declares a `requires` sandbox block (`network: ["slack.com"]`, `subprocess: false`, `filesystem_writes: []`) that RailCall Station enforces at handler-load time. Unlike Notion Guard's/Linear Guard's REST APIs, Slack's Web API always returns HTTP 200 and signals failure through `{"ok": false, "error": "<code>"}`; the handler treats that as a definitive rejection distinct from a true transport-level failure.
 
@@ -21,9 +21,10 @@ This entry is being filed while the module is still in active build-out — see 
 ## Verification evidence
 
 - **Signature**: signed with the real registered publisher key (fingerprint `e469d55383447fc6b95cbffb786fee7c…`, the same identity used for Linear Guard and Notion Guard) via `tools/sign_module_tree.py`. Independently verified both by this repo's own `tools/verify_module_tree.py` (`PASS: RailCall v2 module tree signature is valid`, 23 signed tree files) and by RailCall's own CLI (`railcall market module verify .`): `✓ signature valid`, `ownership: ✓ signed by your local key`.
-- **Module loaded in a real Station**: boot log confirms `muhammad-akif-janjua/slack-guard v0.1.0 · slack.get_team_info` loaded clean (`loaded=3 rejected=4`, this module among the 3 loaded).
+- **Module loaded in a real Station**: boot log confirms `muhammad-akif-janjua/slack-guard v0.2.0` loaded clean with all 11 commands registered.
 - **Sandbox enforcement, not just declaration**: Station's own boot log shows the gate actually installed for this module: `network gate armed — allow: ['slack.com']`, `subprocess gate CLOSED`, `filesystem-write gate active — allow: (none)`.
 - **Real end-to-end read with a signed receipt**: executed `slack.get_team_info` through Studio's Sends tab against a real Slack workspace (team `Slack Guard Dev`, `T0BVA62BUCU`), walking the full preview → approve → execute ceremony (receipt `cmd_20260905T165726Z_slack_get_team_info_87d4489c_executed_0007.json`, `result_status: "executed"`, `http_status: 200`, `approval.method: "ui_click"`, `external_api_touched: true`). Independently re-verified offline with `railcall verify <receipt>`: `✓ SIGNATURE VALID`, signer `ed25519 key_id ecac7bc46608cb35`, checked against this install's `signing_pubkey.json` with no network call.
+- **Real, honest failure receipt**: firing `slack.list_users` against the same live workspace (before its scope was granted) produced `result_status: "failed_safely"`, `note: "execution failed: Slack rejected the request: missing_scope"` — clean, unredacted-because-nothing-secret-in-it, no false success — and this receipt's signature also independently verified (`✓ SIGNATURE VALID`). This is real evidence the write-safety/error-handling path works against Slack's actual API, not just mocked tests; it's also what surfaced that README's scope table was incomplete, since fixed.
 
 ## Trust declaration
 
