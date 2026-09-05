@@ -4,11 +4,11 @@ Governed Slack access for teams: visibility first, then approval-gated writes as
 
 ## What it does
 
-v0.3.0 ships all 11 Tier 1 reads and all 17 Tier 2 low-risk writes against the real Slack Web API: workspace/user/channel discovery, message history, posting and replying, reactions, pins, bookmarks, reminders, channel topic/purpose/creation/joining, and scheduled messages. It is being built out against a public 31-command, 3-tier plan — see the README for the full roadmap and what's live in each version.
+v0.4.0 ships all 39 commands against the real Slack Web API, across all 3 risk tiers: workspace/user/channel discovery, message history, posting and replying, reactions, pins, bookmarks, reminders, channel management, scheduled messages, channel deletion/archival, membership changes, public file sharing, and break-glass token/app revocation.
 
 ## Governance posture
 
-Tier 1 reads execute immediately (no side effect). Tier 2 writes are `write_requires_approval`, risk `low` — Preview → Approve → Execute, same ceremony as a read. Tier 3 (channel deletion/archival, membership changes, public file sharing, break-glass token revocation), once it ships, additionally requires RailCall's human approval airlock. The signed manifest declares `allowed_destinations: [{"provider":"slack","hosts":["slack.com"]}]` — exactly the Slack API host, zero LLM/model-provider egress. Credentials are vault-only; there is no environment-variable or credential-file fallback.
+Tier 1 reads execute immediately (no side effect). Tier 2 writes are `write_requires_approval`, risk `low` — Preview → Approve → Execute, same ceremony as a read. Tier 3 writes are `write_requires_approval`, risk `high`, and the module's own **Open Community Hardened** preset additionally hard-blocks the four highest-abuse Tier 3 commands (`kick_user_from_channel`, `invite_to_channel`, `update_usergroup_members`, `share_file_publicly`) outright — in the handler itself, before any network call, regardless of approval. Set via the optional `SLACK_GUARD_PRESET` field on the same Integrations card as the bot token. The signed manifest declares `allowed_destinations: [{"provider":"slack","hosts":["slack.com"]}]` — exactly the Slack API host, zero LLM/model-provider egress. Credentials are vault-only; there is no environment-variable or credential-file fallback.
 
 ## Setup
 

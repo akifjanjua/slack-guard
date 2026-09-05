@@ -527,6 +527,195 @@ def test_schedule_message(h) -> None:
     print("PASS: slack_schedule_message (post_at validation) / slack_cancel_scheduled_message")
 
 
+def _set_preset(h, preset):
+    h.__rc_helpers__ = {
+        "vault_get": lambda provider: {"SLACK_BOT_TOKEN": "xoxb-test-token", "SLACK_GUARD_PRESET": preset}
+    }
+
+
+def test_active_preset_default_and_values(h) -> None:
+    h.__rc_helpers__ = {"vault_get": lambda provider: "xoxb-test-token"}
+    assert h._active_preset() == "team_copilot"
+    _set_preset(h, "not_a_real_preset")
+    assert h._active_preset() == "team_copilot"
+    _set_preset(h, "Observer")
+    assert h._active_preset() == "observer"
+    _set_preset(h, "open_community_hardened")
+    assert h._active_preset() == "open_community_hardened"
+    _set_preset(h, "team_copilot")
+    print("PASS: _active_preset (defaults to team_copilot on unset/unrecognized, case-insensitive)")
+
+
+def test_hardened_preset_blocks_the_four_commands(h) -> None:
+    """The core ask: real, functional enforcement. Each of the four
+    highest-abuse Tier 3 commands must refuse to run under
+    open_community_hardened BEFORE any network call, and must run normally
+    (reach _request) under team_copilot / observer."""
+
+    def poisoned_request(*args, **kwargs):
+        raise AssertionError("must not reach the network when hard-blocked")
+
+    blocked_calls = {
+        "slack_kick_user_from_channel": {"channel_id": "C1", "user_id": "U1"},
+        "slack_invite_to_channel": {"channel_id": "C1", "user_ids": "U1,U2"},
+        "slack_update_usergroup_members": {"usergroup_id": "S1", "user_ids": "U1,U2"},
+        "slack_share_file_publicly": {"file_id": "F1"},
+    }
+
+    _set_preset(h, "open_community_hardened")
+    h._request = poisoned_request
+    for fn_name, inputs in blocked_calls.items():
+        try:
+            getattr(h, fn_name)(inputs, None)
+            raise AssertionError(f"expected {fn_name} to be blocked under open_community_hardened")
+        except RuntimeError as exc:
+            assert "Open Community Hardened" in str(exc)
+            assert "regardless of approval" in str(exc)
+    print("PASS: all 4 hardened-blocked commands refuse before any network call under open_community_hardened")
+
+    def fake_request(method, path, api_key, body=None, query=None, is_write=False):
+        return 200, {"ok": True, "channel": {"id": "C1"}, "users": ["U1", "U2"]}
+
+    for preset in ("team_copilot", "observer"):
+        _set_preset(h, preset)
+        h._request = fake_request
+        for fn_name, inputs in blocked_calls.items():
+            out, _ = getattr(h, fn_name)(inputs, None)
+            assert out["ok"] is True
+    print("PASS: all 4 commands execute normally under team_copilot and observer (no hard block)")
+    _set_preset(h, "team_copilot")
+
+
+def test_non_hardened_tier3_commands(h) -> None:
+    def fake_rename(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/conversations.rename" and body == {"channel": "C1", "name": "new-name"}
+        return 200, {"ok": True, "channel": {"id": "C1", "name": "new-name"}}
+
+    h._request = fake_rename
+    out, _ = h.slack_rename_channel({"channel_id": "C1", "name": "new-name"}, None)
+    assert out["name"] == "new-name"
+
+    def fake_archive(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/conversations.archive" and body == {"channel": "C1"}
+        return 200, {"ok": True}
+
+    h._request = fake_archive
+    out, _ = h.slack_archive_channel({"channel_id": "C1"}, None)
+    assert out["channel_id"] == "C1"
+
+    def fake_unarchive(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/conversations.unarchive"
+        return 200, {"ok": True}
+
+    h._request = fake_unarchive
+    out, _ = h.slack_unarchive_channel({"channel_id": "C1"}, None)
+    assert out["channel_id"] == "C1"
+
+    def fake_delete_message(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/chat.delete" and body == {"channel": "C1", "ts": "1.1"}
+        return 200, {"ok": True}
+
+    h._request = fake_delete_message
+    out, _ = h.slack_delete_message({"channel_id": "C1", "timestamp": "1.1"}, None)
+    assert out["timestamp"] == "1.1"
+
+    def fake_delete_file(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/files.delete" and body == {"file": "F1"}
+        return 200, {"ok": True}
+
+    h._request = fake_delete_file
+    out, _ = h.slack_delete_file({"file_id": "F1"}, None)
+    assert out["file_id"] == "F1"
+    print("PASS: slack_rename_channel / archive_channel / unarchive_channel / delete_message / delete_file "
+          "(not hard-blocked under any preset)")
+
+
+def test_share_file_publicly_output_and_redaction(h) -> None:
+    _set_preset(h, "team_copilot")
+
+    def fake_request(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/files.sharedPublicURL" and body == {"file": "F1"}
+        return 200, {
+            "ok": True,
+            "file": {"id": "F1", "permalink_public": "https://x.slack.com/files/F1/y?pub_secret=abc123def"},
+        }
+
+    h._request = fake_request
+    out, _ = h.slack_share_file_publicly({"file_id": "F1"}, None)
+    # The success output DELIBERATELY still carries the real URL - it's the
+    # human-approved deliverable of this exact command.
+    assert out["permalink_public"] == "https://x.slack.com/files/F1/y?pub_secret=abc123def"
+    assert "warning" in out and "credential" in out["warning"].lower()
+
+    # But the pub_secret component must be redacted from error/note text the
+    # same way a token would be - defense in depth per SECURITY.md.
+    leaked = "https://x.slack.com/files/F1/y?pub_secret=abc123def"
+    redacted = h._redact(f"unexpected error: {leaked}", "unrelated")
+    assert "abc123def" not in redacted
+    assert "pub_secret=[REDACTED]" in redacted
+    print("PASS: slack_share_file_publicly (success output keeps the real URL, "
+          "pub_secret redacted from error text)")
+
+
+def test_break_glass_confirmation(h) -> None:
+    _set_preset(h, "team_copilot")
+
+    def poisoned_request(*args, **kwargs):
+        raise AssertionError("must not reach the network without the exact confirm phrase")
+
+    h._request = poisoned_request
+    try:
+        h.slack_revoke_token({}, None)
+        raise AssertionError("expected missing confirm rejection")
+    except RuntimeError as exc:
+        assert "REVOKE" in str(exc)
+    try:
+        h.slack_revoke_token({"confirm": "revoke"}, None)  # wrong case
+        raise AssertionError("expected exact-match confirm rejection")
+    except RuntimeError:
+        pass
+    try:
+        h.slack_uninstall_app({}, None)
+        raise AssertionError("expected missing confirm rejection")
+    except RuntimeError as exc:
+        assert "UNINSTALL" in str(exc)
+
+    def fake_revoke(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/auth.revoke"
+        return 200, {"ok": True, "revoked": True}
+
+    h._request = fake_revoke
+    out, _ = h.slack_revoke_token({"confirm": "REVOKE"}, None)
+    assert out["revoked"] is True
+
+    h.__rc_helpers__ = {
+        "vault_get": lambda provider: {
+            "SLACK_BOT_TOKEN": "xoxb-test-token",
+            "SLACK_CLIENT_ID": "client123",
+            "SLACK_CLIENT_SECRET": "supersecret",
+        }
+    }
+
+    def fake_uninstall(method, path, api_key, body=None, query=None, is_write=False):
+        assert path == "/apps.uninstall" and body == {"client_id": "client123", "client_secret": "supersecret"}
+        return 200, {"ok": True}
+
+    h._request = fake_uninstall
+    out, _ = h.slack_uninstall_app({"confirm": "UNINSTALL"}, None)
+    assert out["ok"] is True
+    print("PASS: slack_revoke_token / slack_uninstall_app (exact confirm phrase required before any network call)")
+
+
+def test_uninstall_app_missing_client_credentials(h) -> None:
+    h.__rc_helpers__ = {"vault_get": lambda provider: "xoxb-test-token"}
+    try:
+        h.slack_uninstall_app({"confirm": "UNINSTALL"}, None)
+        raise AssertionError("expected missing client credentials rejection")
+    except RuntimeError as exc:
+        assert "SLACK_CLIENT_ID" in str(exc) and "SLACK_CLIENT_SECRET" in str(exc)
+    print("PASS: slack_uninstall_app requires SLACK_CLIENT_ID/SLACK_CLIENT_SECRET configured")
+
+
 def main() -> int:
     h = load_handler()
     test_get_team_info(h)
@@ -553,6 +742,12 @@ def main() -> int:
     test_channel_topic_purpose(h)
     test_create_and_join_channel(h)
     test_schedule_message(h)
+    test_active_preset_default_and_values(h)
+    test_hardened_preset_blocks_the_four_commands(h)
+    test_non_hardened_tier3_commands(h)
+    test_share_file_publicly_output_and_redaction(h)
+    test_break_glass_confirmation(h)
+    test_uninstall_app_missing_client_credentials(h)
     print("COMMAND LOGIC TESTS PASSED")
     return 0
 

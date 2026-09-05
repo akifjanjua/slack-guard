@@ -60,6 +60,14 @@ def _build_tls_context():
 _SLACK_TOKEN_RE = re.compile(r"xox[bpaes]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}")
 _AUTH_HEADER_RE = re.compile(r"(?i)(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+")
 _SECRET_FIELD_RE = re.compile(r"(?i)(SLACK_BOT_TOKEN\s*[:=]\s*)[^\s,;]+")
+# files.sharedPublicURL mints a bearer-style secret embedded in the file's
+# permalink_public URL as a `pub_secret` query value - anyone holding it can
+# read the file with no login. Redacted from error/note text the same way a
+# token would be (see docs/TROUBLESHOOTING.md and SECURITY.md); the SUCCESS
+# output of slack.share_file_publicly deliberately still returns the full
+# URL, since that link is the actual, human-approved deliverable of the
+# command - redacting it there would make the command useless.
+_SLACK_PUBLIC_SHARE_SECRET_RE = re.compile(r"(?i)(pub_secret=)[A-Za-z0-9]+")
 
 
 def _redact(text, secret):
@@ -70,26 +78,33 @@ def _redact(text, secret):
     text = _SLACK_TOKEN_RE.sub("[REDACTED]", text)
     text = _AUTH_HEADER_RE.sub(r"\1[REDACTED]", text)
     text = _SECRET_FIELD_RE.sub(r"\1[REDACTED]", text)
+    text = _SLACK_PUBLIC_SHARE_SECRET_RE.sub(r"\1[REDACTED]", text)
     return text
 
 
-def _extract_api_key(entry):
-    if isinstance(entry, str):
+def _extract_field(entry, field_name):
+    """Read one named field off a vault_get("slack") entry. Handles the
+    bare-string shape (SLACK_BOT_TOKEN saved as a plain secret), the
+    wrapped {"fields": {...}} shape (legacy keys.local.json / test
+    fixtures), and the bare-fields-dict shape RailCall Station's
+    credential_resolver.resolve() actually returns for named credentials
+    saved through Studio Integrations."""
+    if field_name == "SLACK_BOT_TOKEN" and isinstance(entry, str):
         return entry.strip()
     if isinstance(entry, dict):
         fields = entry.get("fields")
         if isinstance(fields, dict):
-            value = fields.get("SLACK_BOT_TOKEN")
+            value = fields.get(field_name)
             if isinstance(value, str):
                 return value.strip()
-        # RailCall Station's credential_resolver.resolve() returns the bare
-        # fields dict directly for named credentials saved through Studio
-        # Integrations (no "fields" wrapper) - only the legacy keys.local.json
-        # path and test fixtures use the wrapped shape.
-        value = entry.get("SLACK_BOT_TOKEN")
+        value = entry.get(field_name)
         if isinstance(value, str):
             return value.strip()
     return ""
+
+
+def _extract_api_key(entry):
+    return _extract_field(entry, "SLACK_BOT_TOKEN")
 
 
 def _load_api_key():
@@ -123,6 +138,90 @@ def _load_api_key():
             "Integrations before using Slack Guard."
         )
     return api_key
+
+
+def _vault_entry():
+    """Raw vault_get("slack") entry, for reading optional fields alongside
+    the bot token (SLACK_GUARD_PRESET, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET).
+    Returns None on any resolution failure rather than raising - callers that
+    need the entry to exist go through _load_api_key first, which already
+    raises a clear error naming the credential card."""
+    helpers = globals().get("__rc_helpers__")
+    if not isinstance(helpers, dict):
+        return None
+    vault_get = helpers.get("vault_get")
+    if vault_get is None:
+        return None
+    try:
+        return vault_get("slack")
+    except Exception:
+        return None
+
+
+_VALID_PRESETS = {"observer", "team_copilot", "open_community_hardened"}
+_DEFAULT_PRESET = "team_copilot"
+
+# Hard-blocked outright under the Open Community Hardened preset, regardless
+# of approval: the two channel-membership actions and the one usergroup-
+# membership action (Slack Guard's own §4 governance design - README's
+# "Governance presets" section), plus the one command that turns a private
+# file into a world-readable link. On a large open/public workspace the
+# abuse surface of these four is qualitatively worse than in a closed team,
+# and an approval prompt alone isn't judged a strong enough gate for them.
+_HARDENED_BLOCKED_COMMANDS = {
+    "slack.kick_user_from_channel",
+    "slack.invite_to_channel",
+    "slack.update_usergroup_members",
+    "slack.share_file_publicly",
+}
+
+
+def _active_preset():
+    """Which governance preset is active for this install. Read from the
+    SAME vault_get("slack") credential entry as the bot token (an optional
+    SLACK_GUARD_PRESET field on the same Studio Integrations card) so there
+    is nothing new to configure beyond the one card the operator already
+    fills in. Defaults to "team_copilot" (the balanced default, no hard
+    blocks) whenever the field is unset, unreadable, or unrecognized -
+    fails toward the LESS restrictive preset on purpose, since an operator
+    who never touched this setting should never have existing behavior
+    silently change under them."""
+    preset = _extract_field(_vault_entry(), "SLACK_GUARD_PRESET").lower()
+    return preset if preset in _VALID_PRESETS else _DEFAULT_PRESET
+
+
+def _enforce_preset_block(command_id):
+    """Real, functional enforcement - not just a documented label. Under the
+    Open Community Hardened preset, the highest-abuse Tier 3 commands refuse
+    to run at all: this runs before any network call and before approval is
+    even relevant, so no amount of approving can make a hard-blocked command
+    execute on this preset."""
+    if _active_preset() == "open_community_hardened" and command_id in _HARDENED_BLOCKED_COMMANDS:
+        raise RuntimeError(
+            f"Blocked by the Open Community Hardened preset: {command_id} is disabled "
+            "outright on this install, regardless of approval, because its abuse "
+            "surface (channel/usergroup membership changes, public file sharing) is "
+            "too high for a large open workspace. Switch SLACK_GUARD_PRESET to "
+            "team_copilot or observer on the muhammad-akif-janjua-slack-guard::slack "
+            "card if this is actually a closed team."
+        )
+
+
+def _load_client_credentials():
+    """SLACK_CLIENT_ID/SLACK_CLIENT_SECRET, needed only by slack.uninstall_app.
+    Vault-only, same as the bot token - never accepted as command inputs,
+    since an input value is exactly what a preview/approval receipt persists
+    to disk, and a client secret has no business landing in a receipt file."""
+    entry = _vault_entry()
+    client_id = _extract_field(entry, "SLACK_CLIENT_ID")
+    client_secret = _extract_field(entry, "SLACK_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "slack.uninstall_app needs SLACK_CLIENT_ID and SLACK_CLIENT_SECRET "
+            "configured on the muhammad-akif-janjua-slack-guard::slack card (from "
+            "your Slack app's Basic Information page), in addition to SLACK_BOT_TOKEN."
+        )
+    return client_id, client_secret
 
 
 # Reads have no side effect, so a transient failure can be retried safely;
@@ -942,3 +1041,183 @@ def slack_cancel_scheduled_message(inputs, stamp):
         "channel_id": channel_id,
         "scheduled_message_id": scheduled_message_id,
     }, None
+
+
+# --- Tier 3: high-risk writes, human approval airlock ---
+
+
+def slack_rename_channel(inputs, stamp):
+    """Rename a channel."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    name = _require(inputs.get("name"), "name")
+    body = {"channel": channel_id, "name": name}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/conversations.rename", api_key, body=body, is_write=True)
+    channel = data.get("channel") or {}
+    return {
+        "ok": True,
+        "http_status": status,
+        "channel_id": channel.get("id") or channel_id,
+        "name": channel.get("name"),
+    }, None
+
+
+def slack_archive_channel(inputs, stamp):
+    """Archive a channel. Members can no longer post; use
+    slack.unarchive_channel to reverse."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    body = {"channel": channel_id}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/conversations.archive", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id}, None
+
+
+def slack_unarchive_channel(inputs, stamp):
+    """Restore a previously archived channel."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    body = {"channel": channel_id}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/conversations.unarchive", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id}, None
+
+
+def slack_delete_message(inputs, stamp):
+    """Permanently delete a message. Irreversible - Slack has no undo."""
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    timestamp = _require(inputs.get("timestamp"), "timestamp")
+    body = {"channel": channel_id, "ts": timestamp}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/chat.delete", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "timestamp": timestamp}, None
+
+
+def slack_kick_user_from_channel(inputs, stamp):
+    """Remove a member from a channel. Hard-blocked under the Open Community
+    Hardened preset (see README - Governance presets): a membership change,
+    socially loaded and easy to abuse on a large open workspace."""
+    _enforce_preset_block("slack.kick_user_from_channel")
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    user_id = _require_id(inputs.get("user_id"), "user_id")
+    body = {"channel": channel_id, "user": user_id}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/conversations.kick", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "channel_id": channel_id, "user_id": user_id}, None
+
+
+def slack_invite_to_channel(inputs, stamp):
+    """Add one or more members to a channel. Hard-blocked under the Open
+    Community Hardened preset: adds people to potentially sensitive content,
+    same reasoning as the kick side of a membership change."""
+    _enforce_preset_block("slack.invite_to_channel")
+    channel_id = _require_id(inputs.get("channel_id"), "channel_id")
+    user_ids = inputs.get("user_ids")
+    if not isinstance(user_ids, str) or not user_ids.strip():
+        raise RuntimeError("user_ids is required (comma-separated Slack user IDs).")
+    body = {"channel": channel_id, "users": user_ids.strip()}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/conversations.invite", api_key, body=body, is_write=True)
+    channel = data.get("channel") or {}
+    return {"ok": True, "http_status": status, "channel_id": channel.get("id") or channel_id}, None
+
+
+def slack_delete_file(inputs, stamp):
+    """Permanently delete a file. Irreversible."""
+    file_id = _require(inputs.get("file_id"), "file_id")
+    body = {"file": file_id}
+    api_key = _load_api_key()
+    status, _data = _request("POST", "/files.delete", api_key, body=body, is_write=True)
+    return {"ok": True, "http_status": status, "file_id": file_id}, None
+
+
+def slack_update_usergroup_members(inputs, stamp):
+    """Replace a usergroup's ENTIRE membership list - not additive; omitting
+    an existing member removes them. Hard-blocked under the Open Community
+    Hardened preset: rewrites who a broadcast @-mention group pings, high
+    blast radius, easy to abuse for spam or exclusion."""
+    _enforce_preset_block("slack.update_usergroup_members")
+    usergroup_id = _require(inputs.get("usergroup_id"), "usergroup_id")
+    user_ids = inputs.get("user_ids")
+    if not isinstance(user_ids, str) or not user_ids.strip():
+        raise RuntimeError(
+            "user_ids is required (comma-separated Slack user IDs) - this replaces "
+            "the usergroup's ENTIRE membership, not just adds to it."
+        )
+    body = {"usergroup": usergroup_id, "users": user_ids.strip()}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/usergroups.users.update", api_key, body=body, is_write=True)
+    users = data.get("users")
+    return {
+        "ok": True,
+        "http_status": status,
+        "usergroup_id": usergroup_id,
+        "user_count": len(users) if isinstance(users, list) else None,
+    }, None
+
+
+def slack_share_file_publicly(inputs, stamp):
+    """Make a private file world-readable via a public link - the single
+    highest data-leak-risk command in this module. The returned URL is
+    bearer-style: anyone holding it can read the file, no Slack login
+    required. Hard-blocked under the Open Community Hardened preset.
+
+    The success output deliberately still returns the full URL (it is the
+    human-approved deliverable of this exact command - redacting it there
+    would make the command useless), but the pub_secret component is
+    redacted from any error/note text the same way a token would be (see
+    _redact / SECURITY.md), since that path has no legitimate reason to
+    echo it."""
+    _enforce_preset_block("slack.share_file_publicly")
+    file_id = _require(inputs.get("file_id"), "file_id")
+    body = {"file": file_id}
+    api_key = _load_api_key()
+    status, data = _request("POST", "/files.sharedPublicURL", api_key, body=body, is_write=True)
+    f = data.get("file") or {}
+    return {
+        "ok": True,
+        "http_status": status,
+        "file_id": f.get("id") or file_id,
+        "permalink_public": f.get("permalink_public"),
+        "warning": (
+            "This URL is bearer-style: anyone who has it can read the file with "
+            "no login. Treat it as a credential - never post it somewhere untrusted."
+        ),
+    }, None
+
+
+def slack_uninstall_app(inputs, stamp):
+    """Uninstall this Slack app from the workspace - a break-glass,
+    self-disabling action. Requires typing the literal confirmation phrase
+    'UNINSTALL' in addition to the normal approval ceremony, since this ends
+    the module's ability to do anything else in this workspace. Not
+    hard-blocked under any preset - a legitimate operator must always be
+    able to reach their own break-glass switch."""
+    if inputs.get("confirm") != "UNINSTALL":
+        raise RuntimeError(
+            "confirm must be exactly 'UNINSTALL' to uninstall the Slack app. "
+            "This is irreversible: the app loses access to this workspace immediately."
+        )
+    client_id, client_secret = _load_client_credentials()
+    api_key = _load_api_key()
+    body = {"client_id": client_id, "client_secret": client_secret}
+    try:
+        status, _data = _request("POST", "/apps.uninstall", api_key, body=body, is_write=True)
+    except RuntimeError as exc:
+        raise RuntimeError(_redact(_redact(str(exc), api_key), client_secret)) from None
+    return {"ok": True, "http_status": status}, None
+
+
+def slack_revoke_token(inputs, stamp):
+    """Revoke this module's own bot token - a break-glass, self-disabling
+    action. Requires typing the literal confirmation phrase 'REVOKE' in
+    addition to the normal approval ceremony, since this ends the module's
+    ability to do anything else in this workspace. Not hard-blocked under
+    any preset - a legitimate operator must always be able to reach their
+    own break-glass switch."""
+    if inputs.get("confirm") != "REVOKE":
+        raise RuntimeError(
+            "confirm must be exactly 'REVOKE' to revoke the bot token. "
+            "This is irreversible: every command in this module stops working immediately."
+        )
+    api_key = _load_api_key()
+    status, data = _request("POST", "/auth.revoke", api_key, body={}, is_write=True)
+    return {"ok": True, "http_status": status, "revoked": bool(data.get("revoked"))}, None

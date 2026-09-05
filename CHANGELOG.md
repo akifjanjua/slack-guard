@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+All 11 Tier 3 high-risk writes are now live, completing the full 39-command build order:
+
+- `slack.rename_channel`, `slack.archive_channel`/`slack.unarchive_channel`, `slack.delete_message`, `slack.delete_file` — irreversible or high-blast-radius, `write_requires_approval`, risk `high`, no additional preset restriction.
+- `slack.kick_user_from_channel`, `slack.invite_to_channel`, `slack.update_usergroup_members`, `slack.share_file_publicly` — the four highest-abuse commands, now **hard-blocked in the handler itself** under the Open Community Hardened preset, before any network call and regardless of approval.
+- `slack.uninstall_app` / `slack.revoke_token` — break-glass, last. Both require an exact confirmation phrase (`UNINSTALL`/`REVOKE`) in a `confirm` input, checked before any network call, on top of the normal approval ceremony. `uninstall_app` needs new `SLACK_CLIENT_ID`/`SLACK_CLIENT_SECRET` vault fields (from the Slack app's Basic Information page) — vault-only, like every other credential this module uses, never accepted as a command input.
+
+**Governance presets are now real, not just documentation.** Added `_active_preset()`/`_enforce_preset_block()`, reading an optional `SLACK_GUARD_PRESET` field off the same vault entry as the bot token (`observer` / `team_copilot` / `open_community_hardened`, defaulting to `team_copilot` — the least restrictive — when unset or unrecognized, so existing installs see no behavior change). Investigated Station's own `approval_policy.py` engine first (block/require_human/auto_approve rules keyed by connector+verb) and confirmed it governs Station's built-in providers and MCP/workflow execution, not third-party module commands dispatched through Sends — there is no module-extensible hook into it for this. So the hard block lives in the module's own code instead: `_enforce_preset_block()` runs as the first statement of the four affected command functions and raises before any network call. `tools/validate_release.py` gained a regression check that fails the build if any of those four functions stops calling it; `tools/command_logic_test.py` gained `test_hardened_preset_blocks_the_four_commands`, asserting the transport is never reached under the hardened preset and that all four still execute under the other two.
+
+`slack.share_file_publicly` is a deliberate, documented exception to the redaction rule: its success `output` keeps the real `permalink_public` URL (it's the human-approved deliverable of the command — redacting it there would make the command useless), plus a `warning` field calling it out as bearer-style. The URL's `pub_secret` component is redacted from error/note text the same way a bot token would be, as defense in depth (`test_share_file_publicly_output_and_redaction`).
+
+Corrected a labeling inconsistency present since 0.1.0: README/module.json/marketplace docs called this a "31-command, 3-tier plan" throughout, but the fully-expanded one-verb-per-command build (e.g. `add_reaction`/`remove_reaction` as two separate commands, not one) always totaled more than that once every tier was specified. Now consistently described as 39 commands everywhere current-state docs are checked. Historical CHANGELOG entries from earlier versions are left as originally written.
+
 ## 0.3.0
 
 All 17 Tier 2 low-risk writes are now live against the real Slack Web API, completing Tier 2 per the build order:

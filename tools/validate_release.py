@@ -41,6 +41,27 @@ EXPECTED_COMMANDS = {
     "slack.join_channel": "write_requires_approval",
     "slack.schedule_message": "write_requires_approval",
     "slack.cancel_scheduled_message": "write_requires_approval",
+    "slack.rename_channel": "write_requires_approval",
+    "slack.archive_channel": "write_requires_approval",
+    "slack.unarchive_channel": "write_requires_approval",
+    "slack.delete_message": "write_requires_approval",
+    "slack.kick_user_from_channel": "write_requires_approval",
+    "slack.invite_to_channel": "write_requires_approval",
+    "slack.delete_file": "write_requires_approval",
+    "slack.update_usergroup_members": "write_requires_approval",
+    "slack.share_file_publicly": "write_requires_approval",
+    "slack.uninstall_app": "write_requires_approval",
+    "slack.revoke_token": "write_requires_approval",
+}
+
+# Hard-blocked outright under the Open Community Hardened preset (see
+# README - Governance presets); each must call _enforce_preset_block as
+# real, functional enforcement, not just a documented risk label.
+HARDENED_BLOCKED_COMMANDS = {
+    "slack.kick_user_from_channel",
+    "slack.invite_to_channel",
+    "slack.update_usergroup_members",
+    "slack.share_file_publicly",
 }
 
 FORBIDDEN_SOURCE_PATTERNS = {
@@ -131,7 +152,7 @@ def main() -> int:
         "category": "Chat & Collaboration",
         "name": "Slack",
         "required": ["SLACK_BOT_TOKEN"],
-        "optional": [],
+        "optional": ["SLACK_GUARD_PRESET", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET"],
         "shape": "dict",
         "risk": "high",
         "read_write": "write",
@@ -184,6 +205,19 @@ def main() -> int:
         function_name = command_id.replace(".", "_")
         if function_name not in functions:
             fail(f"{command_id}: handler function {function_name} not found")
+
+        if command_id in HARDENED_BLOCKED_COMMANDS:
+            fn_node = next(
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.FunctionDef) and node.name == function_name
+            )
+            fn_source = ast.get_source_segment(source, fn_node) or ""
+            if "_enforce_preset_block(" not in fn_source:
+                fail(
+                    f"{command_id}: hard-blocked under Open Community Hardened but its "
+                    "handler function never calls _enforce_preset_block - the "
+                    "restriction would be a documented label only, not real enforcement"
+                )
 
         input_schema = command.get("input_schema") or {}
         for field_name, field_spec in input_schema.items():

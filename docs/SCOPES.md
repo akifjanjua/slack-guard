@@ -16,7 +16,11 @@ Add these under your Slack app's **OAuth & Permissions** → **Bot Token Scopes*
 | `pins:write` | `add_pin`, `remove_pin` |
 | `bookmarks:write` | `add_bookmark`, `edit_bookmark`, `remove_bookmark` |
 | `reminders:write` | `add_reminder`, `complete_reminder` |
-| `channels:manage`, `groups:write` | `set_channel_topic`, `set_channel_purpose`, `create_channel` |
+| `channels:manage`, `groups:write` | `set_channel_topic`, `set_channel_purpose`, `create_channel`, `rename_channel`, `archive_channel`, `unarchive_channel`, `kick_user_from_channel`, `invite_to_channel` |
 | `channels:join` | `join_channel` |
+| `files:write` | `delete_file`, `share_file_publicly` |
+| `usergroups:write` | `update_usergroup_members` |
+
+`chat:write` (already listed above) also covers `delete_message` (`chat.delete`) — note that a bot token can only delete messages it posted itself; deleting another user's message needs an admin-level scope this module doesn't request. `uninstall_app` and `revoke_token` need no Bot Token Scope at all — `uninstall_app` instead needs `SLACK_CLIENT_ID`/`SLACK_CLIENT_SECRET` configured on the same Integrations card (from your Slack app's Basic Information page).
 
 Only add the scopes for commands you actually plan to use — an unused scope is unused blast radius. A command that fails with `Slack rejected the request: missing_scope` names the specific missing permission; check it against this table rather than guessing.

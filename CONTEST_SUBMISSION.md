@@ -10,7 +10,7 @@ https://github.com/akifjanjua/slack-guard (branch `master`) — repository visib
 
 ## Description
 
-Slack Guard is a governance-first RailCall module for Slack workspaces, built against a public 31-command, 3-tier plan (reads, low-risk writes, human-airlocked high-risk writes). v0.2.0 ships all 11 Tier 1 read commands against the real Slack Web API — workspace identity, users, channels, channel membership, message history, thread replies, usergroups, files, and Do Not Disturb status.
+Slack Guard is a governance-first RailCall module for Slack workspaces, built against a 39-command, 3-tier plan (reads, low-risk writes, human-airlocked high-risk writes). v0.4.0 ships all 39 commands against the real Slack Web API. Three governance presets, set via an optional field on the same Integrations card as the bot token, give a real functional restriction — not just a documented label: Open Community Hardened hard-blocks the four highest-abuse Tier 3 commands outright, in the handler itself, before any network call, regardless of approval.
 
 Slack Guard resolves credentials only through RailCall's vault helper, uses certifi-backed verified HTTPS, never invokes curl or another subprocess, and actively redacts credentials from errors. `module.json` declares a `requires` sandbox block (`network: ["slack.com"]`, `subprocess: false`, `filesystem_writes: []`) that RailCall Station enforces at handler-load time. Unlike Notion Guard's/Linear Guard's REST APIs, Slack's Web API always returns HTTP 200 and signals failure through `{"ok": false, "error": "<code>"}`; the handler treats that as a definitive rejection distinct from a true transport-level failure.
 
