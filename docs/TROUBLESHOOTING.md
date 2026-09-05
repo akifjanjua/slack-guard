@@ -6,7 +6,7 @@
 
 **`Slack rejected the request: invalid_auth` or `not_authed`** — The bot token is missing, malformed, or was revoked/regenerated in your Slack app's OAuth settings since it was saved. Copy a fresh Bot User OAuth Token from `api.slack.com/apps` → your app → OAuth & Permissions, and re-save it.
 
-**`Slack rejected the request: missing_scope`** — The Slack app is missing a required Bot Token Scope for the command you ran (e.g. `team:read` for `slack.get_team_info`). Add the scope under OAuth & Permissions, then reinstall the app to your workspace — Slack requires a reinstall for new scopes to take effect, not just a save.
+**`Slack rejected the request: missing_scope`** — The Slack app is missing a required Bot Token Scope for the command you ran; see the scope table in `README.md` → Configure credentials for which scope each command needs (e.g. `users:read` for `slack.list_users`). Add the scope under OAuth & Permissions, then **Reinstall to Workspace** — Slack requires a reinstall for new scopes to take effect, not just a save. This is a real, confirmed failure mode: it surfaces as a clean `failed_safely` receipt with Slack's own error code, not a crash or a false success.
 
 **`Slack rejected the request: account_inactive`** — The token's associated app was uninstalled from the workspace, or the installing user's account was deactivated. Reinstall the app and generate a fresh token.
 
@@ -25,4 +25,4 @@ python -c "import certifi; print(certifi.where())"
 
 **`CERTIFICATE_VERIFY_FAILED`** — Confirm certifi is installed and current, then check the computer's date and time. Slack Guard never disables certificate or hostname verification and never falls back to curl.
 
-**Why does a governance-first Slack module have only one command so far?** — Slack Guard is being built command-by-command against a public 31-command, 3-tier build order (see `README.md`), with each new command's tests, docs, and governance wiring shipped together rather than bulk-added at the end. `CHANGELOG.md` tracks exactly what is live in each version.
+**Why does a governance-first Slack module have only 11 commands so far?** — Slack Guard is being built command-by-command against a public 31-command, 3-tier build order (see `README.md`), with each new command's tests, docs, and governance wiring shipped together rather than bulk-added at the end. `CHANGELOG.md` tracks exactly what is live in each version.

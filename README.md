@@ -2,7 +2,7 @@
 
 [![Slack Guard Tests](https://github.com/akifjanjua/slack-guard/actions/workflows/slack-guard-tests.yml/badge.svg)](https://github.com/akifjanjua/slack-guard/actions/workflows/slack-guard-tests.yml)
 
-Slack Guard is a governance-first RailCall module for Slack workspaces. It is being built command-by-command against a 31-command, 3-tier plan; this table is kept current with every version, not written after the fact.
+Slack Guard is a governance-first RailCall module for Slack. Built command-by-command against a 31-command, 3-tier plan; this table stays current every version, not written after the fact.
 
 ## Commands
 
@@ -12,17 +12,17 @@ Slack Guard is a governance-first RailCall module for Slack workspaces. It is be
 | 2 — low-risk write, receipted | planned | `post_message`, `post_ephemeral`, `add_reaction`/`remove_reaction`, `add_pin`/`remove_pin`, `add_bookmark`/`edit_bookmark`/`remove_bookmark`, `add_reminder`/`complete_reminder`, `set_channel_topic`/`set_channel_purpose`, `create_channel`, `join_channel`, `schedule_message`/`cancel_scheduled_message` |
 | 3 — high-risk write, human airlock | planned | `rename_channel`, `archive_channel`/`unarchive_channel`, `delete_message`, `kick_user_from_channel`, `invite_to_channel`, `delete_file`, `update_usergroup_members`, `share_file_publicly`, `uninstall_app`/`revoke_token` (break-glass, last) |
 
-`slack.get_team_info` takes no inputs and doubles as the connectivity smoke test. The discovery reads (`list_users`, `list_channels`, `list_usergroups`) exist so a later Tier 2/3 write can address a real channel/user/group by id instead of guessing one. All Tier 1 reads are single-item-or-page by design, with Slack's own `next_cursor` for pagination where the endpoint supports it.
+`get_team_info` takes no inputs and doubles as the connectivity smoke test. The discovery reads (`list_users`, `list_channels`, `list_usergroups`) let a later write address a real channel/user/group by id instead of guessing one. Reads paginate via Slack's own `next_cursor` where the endpoint supports it.
 
 ## Governance presets
 
-- **Observer** (recommended first-install default) — every write, Tier 2 included, requires the approval airlock. Zero trust in agent judgment until an operator has watched it work.
-- **Team Copilot** — the tiered split above once Tier 2/3 ship: reads free, low-risk writes receipted, high-risk writes airlocked. Becomes the shipped default at that point.
-- **Open Community Hardened** — Team Copilot, plus channel-membership and usergroup-membership changes are hard-blocked rather than merely airlocked, and `share_file_publicly` is disabled outright. For large open/public workspaces, where the blast radius of those actions is worse than in a closed team and an approval prompt alone isn't a strong enough gate.
+- **Observer** (recommended default) — every write, Tier 2 included, needs approval. Zero trust until an operator has watched it work.
+- **Team Copilot** — the tiered split above, once Tier 2/3 ship: reads free, low-risk writes receipted, high-risk writes airlocked. The eventual shipped default.
+- **Open Community Hardened** — Team Copilot, but membership changes are hard-blocked, not airlocked, and `share_file_publicly` is disabled outright. For large open/public workspaces.
 
 ## Egress contract
 
-The signed manifest declares `allowed_destinations: [{"provider":"slack","hosts":["slack.com"]}]` — Slack only, zero LLM/model-provider destinations, enforced by Station at load time. See [SECURITY.md](SECURITY.md).
+The signed manifest declares `allowed_destinations: [{"provider":"slack","hosts":["slack.com"]}]` — Slack only, zero LLM egress, enforced by Station at load time. See [SECURITY.md](SECURITY.md).
 
 ## Install
 
@@ -31,22 +31,32 @@ python -m pip install certifi
 git clone https://github.com/akifjanjua/slack-guard.git
 ```
 
-Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/` (the folder name is the module slug). Open RailCall Studio, reload **Modules**, and confirm **Slack Guard v0.2.0**, **signature verified**, **11 commands**.
+Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/` (the folder name is the module slug). Open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.2.0**, **signature verified**, **11 commands**.
 
-Post-publish, this will work instead: `railcall market install muhammad-akif-janjua/slack-guard`. Slack Guard is free (`license_required: false`).
+Post-publish: `railcall market install muhammad-akif-janjua/slack-guard`. Free (`license_required: false`).
 
 ## Configure credentials
 
-Create a custom Slack app at `api.slack.com/apps` → **From scratch**, in the workspace you want it to govern. Under **OAuth & Permissions**, add the Bot Token Scope `team:read` (more scopes are added as Tier 2/3 commands ship), then **Install to Workspace** and copy the **Bot User OAuth Token** (`xoxb-...`).
+Create a custom Slack app at `api.slack.com/apps` → **From scratch**, in the workspace to govern. Under **OAuth & Permissions**, add the Bot Token Scopes below for the commands you plan to use, then **Install to Workspace** and copy the **Bot User OAuth Token** (`xoxb-...`). A scope added after install needs **Reinstall to Workspace**, not just Save, to take effect.
+
+| Scope | Needed for |
+|---|---|
+| `team:read` | `get_team_info` |
+| `users:read`, `users:read.email` | `list_users`, `get_user_info` |
+| `channels:read`, `groups:read` | `list_channels`, `get_channel_info`, `list_channel_members` |
+| `channels:history`, `groups:history` | `get_channel_history`, `get_thread_replies` |
+| `usergroups:read` | `list_usergroups` |
+| `files:read` | `list_files` |
+| `dnd:read` | `get_dnd_status` |
 
 In Studio → **Integrations**, search "slack" and save the token as `SLACK_BOT_TOKEN` on the `muhammad-akif-janjua-slack-guard::slack` card.
 
 ## Run a command
 
-Open Studio's **Sends** tab (`#/sends?module=slack`), pick `slack.get_team_info`, click **Fire**, then **1. Preview → 2. Approve → 3. Execute**. Both reads and writes produce a signed receipt.
+Open Studio's **Sends** tab (`#/sends?module=slack`), pick a command, click **Fire**, then **1. Preview → 2. Approve → 3. Execute**. Every command produces a signed receipt, even a rejected one — a missing scope fails cleanly as `failed_safely`, never a false success.
 
 ## Limitations
 
-Scoped entirely to a single-workspace custom-app bot token — the no-review, PAT-equivalent install path. `admin.*` endpoints (org-wide user provisioning, audit logs, DLP information barriers) require an Enterprise Grid org-level admin install and are out of scope for this module.
+Scoped to a single-workspace custom-app bot token, the no-review install path. `admin.*` endpoints (org-wide provisioning, audit, DLP barriers) need an Enterprise Grid admin install and are out of scope.
 
 `contest:2026Q3`
