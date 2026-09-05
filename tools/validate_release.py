@@ -14,6 +14,16 @@ HANDLER_PATH = ROOT / "handlers" / "handler.py"
 
 EXPECTED_COMMANDS = {
     "slack.get_team_info": "read",
+    "slack.list_users": "read",
+    "slack.get_user_info": "read",
+    "slack.list_channels": "read",
+    "slack.get_channel_info": "read",
+    "slack.list_channel_members": "read",
+    "slack.get_channel_history": "read",
+    "slack.get_thread_replies": "read",
+    "slack.list_usergroups": "read",
+    "slack.list_files": "read",
+    "slack.get_dnd_status": "read",
 }
 
 FORBIDDEN_SOURCE_PATTERNS = {

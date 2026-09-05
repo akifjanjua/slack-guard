@@ -4,11 +4,11 @@ Governed Slack access for teams: visibility first, then approval-gated writes as
 
 ## What it does
 
-v0.1.0 ships one command against the real Slack Web API: `slack.get_team_info`, a read that confirms the connected workspace's identity and doubles as the connectivity smoke test. It is being built out against a public 31-command, 3-tier plan (reads, low-risk writes, human-airlocked high-risk writes) — see the README for the full roadmap and what's live in each version.
+v0.2.0 ships all 11 Tier 1 read commands against the real Slack Web API: workspace identity, users, channels, channel membership, message history and thread replies, usergroups, files, and Do Not Disturb status. It is being built out against a public 31-command, 3-tier plan (reads, low-risk writes, human-airlocked high-risk writes) — see the README for the full roadmap and what's live in each version.
 
 ## Governance posture
 
-`slack.get_team_info` executes immediately (it has no side effect). Every write command, as it ships, will be `write_requires_approval` at minimum, with Tier 3 (channel deletion/archival, membership changes, public file sharing, break-glass token revocation) additionally requiring RailCall's human approval airlock. The signed manifest declares `allowed_destinations: [{"provider":"slack","hosts":["slack.com"]}]` — exactly the Slack API host, zero LLM/model-provider egress. Credentials are vault-only; there is no environment-variable or credential-file fallback.
+All 11 Tier 1 reads execute immediately (none has a side effect). Every write command, as it ships, will be `write_requires_approval` at minimum, with Tier 3 (channel deletion/archival, membership changes, public file sharing, break-glass token revocation) additionally requiring RailCall's human approval airlock. The signed manifest declares `allowed_destinations: [{"provider":"slack","hosts":["slack.com"]}]` — exactly the Slack API host, zero LLM/model-provider egress. Credentials are vault-only; there is no environment-variable or credential-file fallback.
 
 ## Setup
 
