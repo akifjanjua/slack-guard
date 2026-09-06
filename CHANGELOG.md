@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2
+
+Publish-prep follow-up, no code or command changes.
+
+- Added a note to `MARKETPLACE_LISTING.md`, placed right after the opening tagline and before the command table, addressing the storefront's `approval: auto` badge directly. Traced through `railcall_cli.py`: the field genuinely means what it looks like it means (`_market_list`'s own badge logic reads `approval == "require_human"` to flag a listing as needing a human in the loop), but neither module-type nor the generic publish payload construction (`_market_publish_module`) ever sets it — it's a workflow-listing concept that was never wired up for modules, so the backend/CLI display falls back to `auto_approve` regardless of what the module's commands actually declare. For a governance module where 28 of 39 commands are `write_requires_approval`, that default is actively misleading rather than merely incomplete. Reported to RailCall as a platform gap; not fixable from this module's own code, so the listing now says so plainly and points to the real per-command mode in the table above it.
+- Version bump only to satisfy the marketplace's strictly-increasing-version requirement for a republish (see `PUBLISH_CHECKLIST.md`) — `module.json`'s description and README's install-confirmation line updated to match; no handler or command behavior changed.
+
 ## 0.4.1
 
 Fresh, skeptical bug-hunt pass across all 39 commands before publish prep — same spirit as the reviews that caught real issues on Notion Guard right before its last two republishes. Assumed nothing from prior passes still held; two real, fixed findings, plus a docs sweep.

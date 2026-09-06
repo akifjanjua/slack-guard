@@ -2,9 +2,11 @@
 
 Governed Slack access for teams: every command previewed, human-approved where it matters, and receipted — visibility by default, writes on an airlock, the riskiest actions hard-blocked by preset before they can even reach Slack.
 
+**Note on the storefront's "approval: auto" badge:** this reflects a platform-level gap (module-type listings don't currently populate this field at all, unlike workflow listings — reported to RailCall). It does not reflect this module's actual behavior: 28 of 39 commands are `write_requires_approval` and go through the full Preview → Approve → Execute ceremony. See the command table below for the real per-command mode.
+
 ## What it does
 
-v0.4.1 ships all 39 commands against the real Slack Web API, across 3 risk tiers.
+v0.4.2 ships all 39 commands against the real Slack Web API, across 3 risk tiers.
 
 | Tier | Mode | Commands |
 |---|---|---|
@@ -52,7 +54,7 @@ python -m pip install certifi
 git clone https://github.com/akifjanjua/slack-guard.git
 ```
 
-Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/`, open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.4.1**, **signature verified**, **39 commands**. Post-publish: `railcall market install muhammad-akif-janjua/slack-guard`.
+Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/`, open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.4.2**, **signature verified**, **39 commands**. Post-publish: `railcall market install muhammad-akif-janjua/slack-guard`.
 
 ## Setup
 

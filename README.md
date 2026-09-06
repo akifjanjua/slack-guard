@@ -35,7 +35,7 @@ python -m pip install certifi
 git clone https://github.com/akifjanjua/slack-guard.git
 ```
 
-Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/` (the folder name is the module slug). Open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.4.1**, **signature verified**, **39 commands**.
+Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/` (the folder name is the module slug). Open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.4.2**, **signature verified**, **39 commands**.
 
 Post-publish: `railcall market install muhammad-akif-janjua/slack-guard`. Free (`license_required: false`).
 
