@@ -6,7 +6,7 @@ Governed Slack access for teams: every command previewed, human-approved where i
 
 ## What it does
 
-v0.4.2 ships all 39 commands against the real Slack Web API, across 3 risk tiers.
+v0.4.3 ships all 39 commands against the real Slack Web API, across 3 risk tiers.
 
 | Tier | Mode | Commands |
 |---|---|---|
@@ -54,7 +54,7 @@ python -m pip install certifi
 git clone https://github.com/akifjanjua/slack-guard.git
 ```
 
-Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/`, open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.4.2**, **signature verified**, **39 commands**. Post-publish: `railcall market install muhammad-akif-janjua/slack-guard`.
+Copy the cloned folder's contents into `~/.railcall/station/modules/muhammad-akif-janjua-slack-guard/`, open RailCall Studio, reload **Modules**, confirm **Slack Guard v0.4.3**, **signature verified**, **39 commands**. Post-publish: `railcall market install muhammad-akif-janjua/slack-guard`.
 
 ## Setup
 

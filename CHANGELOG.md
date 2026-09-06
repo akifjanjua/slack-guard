@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+Corrects a mistake in 0.4.2's own fix. The `approval: auto` note was added to `MARKETPLACE_LISTING.md`, but that file is not what the marketplace actually publishes — `_market_publish_module` in `railcall_cli.py` sources the storefront's OVERVIEW text from `module.json`'s own `description` field (an entirely separate blob of text), and reads `MARKETPLACE_LISTING.md` only if `--description <file>` is explicitly passed on the publish command, which it never has been for this module. So 0.4.2 published cleanly and the repo doc was correct, but the live storefront never actually showed the note — confirmed by re-reading the storefront's OVERVIEW text after the 0.4.2 republish and finding the original text, unchanged. Added the equivalent note directly to `module.json`'s `description` field (right after the opening paragraph, before the "Command set" listing, mirroring the placement in `MARKETPLACE_LISTING.md`) so it actually reaches the storefront this time. Version bump only, same strictly-increasing-version requirement as 0.4.2; no handler or command behavior changed either version.
+
 ## 0.4.2
 
 Publish-prep follow-up, no code or command changes.
